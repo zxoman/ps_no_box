@@ -29,10 +29,11 @@ jobs:
         run: npm ci
 
       - name: Build Windows installer
-        run: npm run dist
+        run: npx electron-builder --win --publish never
         env:
           # Skip code signing in CI unless secrets are provided
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
