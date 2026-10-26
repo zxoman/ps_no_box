@@ -1,0 +1,20 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+*.exe
+*.rar
+*.zip
+!package-lock.json
+.idea/
+.vscode/
+trial_*.txt
+activation_info.txt
+*.db
+*.sqlite
+*.sqlite3
+builder-debug.yml
+builder-effective-config.yaml
+# أدوات توليد أكواد التفعيل — لا ترفعها للريبو العام
+New folder/

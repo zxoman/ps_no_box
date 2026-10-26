@@ -1,0 +1,385 @@
+/**
+ * تنسيقات تقارير المصروفات في الشيفتات
+ * Shift Expenses Reports Styles
+ */
+
+/* تنسيقات عامة */
+.shift-expenses-report,
+.all-shifts-expenses-report,
+.expenses-statistics {
+  font-family: 'Cairo', 'Arial', sans-serif;
+  direction: rtl;
+  text-align: right;
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  margin: 20px 0;
+}
+
+.shift-expenses-report h3,
+.all-shifts-expenses-report h3,
+.expenses-statistics h3 {
+  color: #2c3e50;
+  margin-bottom: 20px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: bold;
+}
+
+/* بطاقات الملخص */
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 15px;
+  margin-bottom: 30px;
+}
+
+.summary-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 20px;
+  border-radius: 10px;
+  text-align: center;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  transition: transform 0.3s ease;
+}
+
+.summary-card:hover {
+  transform: translateY(-5px);
+}
+
+.summary-card h4 {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.summary-card .amount {
+  font-size: 24px;
+  font-weight: bold;
+  margin: 0;
+}
+
+.summary-card .count {
+  font-size: 20px;
+  font-weight: bold;
+  margin: 0;
+}
+
+.summary-card .duration {
+  font-size: 16px;
+  margin: 0;
+}
+
+/* تفصيل المصروفات حسب الفئة */
+.expenses-breakdown,
+.category-statistics,
+.frequency-statistics {
+  margin-bottom: 30px;
+}
+
+.expenses-breakdown h4,
+.category-statistics h4,
+.frequency-statistics h4 {
+  color: #34495e;
+  margin-bottom: 15px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.category-breakdown,
+.category-chart,
+.frequency-chart {
+  background: white;
+  border-radius: 8px;
+  padding: 15px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+}
+
+.category-item,
+.frequency-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px;
+  margin: 5px 0;
+  background: #f8f9fa;
+  border-radius: 5px;
+  border-right: 4px solid #3498db;
+  transition: background-color 0.3s ease;
+}
+
+.category-item:hover,
+.frequency-item:hover {
+  background: #e9ecef;
+}
+
+.category-name,
+.frequency-name {
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.category-amount,
+.frequency-amount {
+  font-weight: bold;
+  color: #27ae60;
+}
+
+.category-percentage,
+.frequency-percentage {
+  background: #3498db;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 15px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.category-count,
+.frequency-count {
+  color: #7f8c8d;
+  font-size: 12px;
+}
+
+/* قائمة المصروفات */
+.expenses-list h4 {
+  color: #34495e;
+  margin-bottom: 15px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.expenses-table {
+  background: white;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+}
+
+.expense-item {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 15px;
+  padding: 15px;
+  border-bottom: 1px solid #ecf0f1;
+  align-items: center;
+  transition: background-color 0.3s ease;
+}
+
+.expense-item:hover {
+  background: #f8f9fa;
+}
+
+.expense-item:last-child {
+  border-bottom: none;
+}
+
+.expense-title {
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.expense-amount {
+  font-weight: bold;
+  color: #e74c3c;
+  text-align: center;
+}
+
+.expense-category {
+  color: #7f8c8d;
+  text-align: center;
+  font-size: 14px;
+}
+
+.expense-date {
+  color: #95a5a6;
+  text-align: center;
+  font-size: 12px;
+}
+
+/* قائمة الشيفتات */
+.shifts-list h4 {
+  color: #34495e;
+  margin-bottom: 15px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.shifts-table {
+  background: white;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+}
+
+.shift-item {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  padding: 20px;
+  border-bottom: 1px solid #ecf0f1;
+  transition: background-color 0.3s ease;
+}
+
+.shift-item:hover {
+  background: #f8f9fa;
+}
+
+.shift-item:last-child {
+  border-bottom: none;
+}
+
+.shift-info h5 {
+  color: #2c3e50;
+  margin: 0 0 10px 0;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.shift-info p {
+  color: #7f8c8d;
+  margin: 5px 0;
+  font-size: 14px;
+}
+
+.shift-expenses p {
+  color: #2c3e50;
+  margin: 5px 0;
+  font-size: 14px;
+}
+
+.shift-expenses p:first-child {
+  font-weight: bold;
+  color: #e74c3c;
+}
+
+/* رسائل الخطأ */
+.error {
+  background: #e74c3c;
+  color: white;
+  padding: 15px;
+  border-radius: 5px;
+  text-align: center;
+  font-weight: bold;
+  margin: 20px 0;
+}
+
+/* تنسيقات متجاوبة */
+@media (max-width: 768px) {
+  .summary-cards {
+    grid-template-columns: 1fr;
+  }
+  
+  .expense-item {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    text-align: center;
+  }
+  
+  .shift-item {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+  
+  .category-item,
+  .frequency-item {
+    flex-direction: column;
+    gap: 5px;
+    text-align: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .shift-expenses-report,
+  .all-shifts-expenses-report,
+  .expenses-statistics {
+    padding: 15px;
+    margin: 10px 0;
+  }
+  
+  .summary-card {
+    padding: 15px;
+  }
+  
+  .summary-card .amount {
+    font-size: 20px;
+  }
+  
+  .summary-card .count {
+    font-size: 18px;
+  }
+}
+
+/* تنسيقات إضافية للرسوم البيانية */
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #ecf0f1;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 5px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3498db, #2ecc71);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+/* تنسيقات للأزرار */
+.calculate-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 25px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  margin: 10px 5px;
+}
+
+.calculate-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+}
+
+.calculate-btn:active {
+  transform: translateY(0);
+}
+
+/* تنسيقات للجداول */
+.table-header {
+  background: #34495e;
+  color: white;
+  padding: 15px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.table-row {
+  background: white;
+  border-bottom: 1px solid #ecf0f1;
+  transition: background-color 0.3s ease;
+}
+
+.table-row:hover {
+  background: #f8f9fa;
+}
+
+.table-cell {
+  padding: 15px;
+  text-align: center;
+  border-right: 1px solid #ecf0f1;
+}
+
+.table-cell:last-child {
+  border-right: none;
+}
+
+
+

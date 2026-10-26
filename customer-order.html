@@ -1,0 +1,1214 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>طلب منتجات</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #009ddf;
+      min-height: 100vh;
+      padding: 10px;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      overflow: hidden;
+    }
+    .header {
+      background: #009ddf;
+      color: white;
+      padding: 20px;
+      text-align: center;
+      position: relative;
+    }
+    .logo-container {
+      margin-bottom: 15px;
+    }
+    .logo {
+      font-size: 48px;
+      font-weight: 900;
+      letter-spacing: 3px;
+      color: #009ddf;
+      background: white;
+      display: inline-block;
+      padding: 18px 30px;
+      border-radius: 15px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+      position: relative;
+      font-family: 'Arial Black', 'Arial Bold', sans-serif;
+      line-height: 1;
+    }
+    .logo .lightning-o {
+      display: inline-block;
+      position: relative;
+      font-size: 48px;
+    }
+    .logo .lightning-o::after {
+      content: '⚡';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 28px;
+      color: white;
+    }
+    .logo .lightning-t {
+      display: inline-block;
+      position: relative;
+    }
+    .logo .lightning-t::after {
+      content: '⚡';
+      position: absolute;
+      right: -8px;
+      bottom: -12px;
+      font-size: 24px;
+      color: #009ddf;
+      transform: rotate(-15deg);
+    }
+    .header h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+      color: white;
+      font-weight: 600;
+    }
+    .header p {
+      font-size: 14px;
+      opacity: 0.95;
+    }
+    .content {
+      padding: 20px 15px;
+    }
+    .customer-info {
+      margin-bottom: 30px;
+      padding: 20px;
+      background: #f8f9fa;
+      border-radius: 10px;
+    }
+    .customer-info input {
+      width: 100%;
+      padding: 12px;
+      margin: 10px 0;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 16px;
+      transition: border-color 0.3s;
+    }
+    .customer-info input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    .products-section {
+      margin-bottom: 30px;
+    }
+    .products-section h2 {
+      margin-bottom: 20px;
+      color: #333;
+      font-size: 22px;
+    }
+    .product-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      margin: 15px 0;
+      background: #f8f9fa;
+      border-radius: 15px;
+      border: 2px solid transparent;
+      transition: all 0.3s;
+      text-align: center;
+      width: 100%;
+      max-width: 300px;
+    }
+    .products-list-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 20px;
+      margin-top: 20px;
+    }
+    .product-item:hover {
+      border-color: #009ddf;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(255, 107, 53, 0.3);
+    }
+    .product-image {
+      width: 150px;
+      height: 150px;
+      object-fit: cover;
+      border-radius: 12px;
+      margin-bottom: 15px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .product-details {
+      width: 100%;
+      margin-bottom: 15px;
+    }
+    .product-details h3 {
+      font-size: 20px;
+      color: #333;
+      margin-bottom: 8px;
+    }
+    .product-details .price {
+      color: #009ddf;
+      font-weight: bold;
+      font-size: 18px;
+    }
+    .product-controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 15px;
+      margin-bottom: 15px;
+    }
+    .product-note {
+      width: 100%;
+      margin-top: 10px;
+    }
+    .product-note textarea {
+      width: 100%;
+      padding: 10px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      resize: vertical;
+      min-height: 60px;
+      transition: border-color 0.3s;
+    }
+    .product-note textarea:focus {
+      outline: none;
+      border-color: #ff6b35;
+    }
+    .quantity-btn {
+      width: 40px;
+      height: 40px;
+      border: none;
+      background: #ff6b35;
+      color: white;
+      border-radius: 50%;
+      font-size: 22px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s;
+      font-weight: bold;
+      box-shadow: 0 2px 8px rgba(255, 107, 53, 0.3);
+    }
+    .quantity-btn:hover {
+      background: #ff8c42;
+      transform: scale(1.1);
+      box-shadow: 0 4px 12px rgba(255, 107, 53, 0.4);
+    }
+    .quantity-btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .quantity-display {
+      min-width: 40px;
+      text-align: center;
+      font-size: 18px;
+      font-weight: bold;
+    }
+    .cart-summary {
+      background: #f8f9fa;
+      padding: 20px;
+      border-radius: 10px;
+      margin-top: 20px;
+    }
+    .cart-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .cart-item:last-child {
+      border-bottom: none;
+    }
+    .total {
+      display: flex;
+      justify-content: space-between;
+      padding: 15px 0;
+      margin-top: 15px;
+      border-top: 2px solid #ff6b35;
+      font-size: 20px;
+      font-weight: bold;
+      color: #ff6b35;
+    }
+    .submit-btn {
+      width: 100%;
+      padding: 18px;
+      background: linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 18px;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 20px;
+      transition: all 0.3s;
+      box-shadow: 0 4px 15px rgba(255, 107, 53, 0.3);
+    }
+    .submit-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(255, 107, 53, 0.4);
+    }
+    .submit-btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+    }
+    .error {
+      background: #fee;
+      color: #c33;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 10px 0;
+      text-align: center;
+    }
+    .success {
+      background: #efe;
+      color: #3c3;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 10px 0;
+      text-align: center;
+    }
+    .empty-cart {
+      text-align: center;
+      padding: 40px;
+      color: #999;
+    }
+    
+    /* تصميم متجاوب للهواتف */
+    @media (max-width: 768px) {
+      body {
+        padding: 5px;
+      }
+      .container {
+        border-radius: 15px;
+      }
+      .header {
+        padding: 15px 10px;
+      }
+      .logo {
+        font-size: 36px;
+        padding: 12px 20px;
+        letter-spacing: 2px;
+      }
+      .logo .lightning-o {
+        font-size: 36px;
+      }
+      .logo .lightning-o::after {
+        font-size: 20px;
+      }
+      .logo .lightning-t::after {
+        font-size: 18px;
+        right: -6px;
+        bottom: -10px;
+      }
+      .header h1 {
+        font-size: 20px;
+      }
+      .header p {
+        font-size: 13px;
+      }
+      .content {
+        padding: 15px 10px;
+      }
+      .products-list-grid {
+        grid-template-columns: 1fr;
+        gap: 15px;
+      }
+      .product-item {
+        max-width: 100%;
+        padding: 15px;
+      }
+      .product-image {
+        width: 120px;
+        height: 120px;
+      }
+      .product-details h3 {
+        font-size: 18px;
+      }
+      .product-details .price {
+        font-size: 16px;
+      }
+      .quantity-btn {
+        width: 38px;
+        height: 38px;
+        font-size: 20px;
+      }
+      .cart-summary {
+        padding: 15px;
+      }
+      .submit-btn {
+        padding: 16px;
+        font-size: 16px;
+      }
+    }
+    
+    @media (max-width: 480px) {
+      .logo {
+        font-size: 30px;
+        padding: 10px 15px;
+        letter-spacing: 1px;
+      }
+      .logo .lightning-o {
+        font-size: 30px;
+      }
+      .logo .lightning-o::after {
+        font-size: 16px;
+      }
+      .logo .lightning-t::after {
+        font-size: 14px;
+        right: -5px;
+        bottom: -8px;
+      }
+      .header h1 {
+        font-size: 18px;
+      }
+      .product-image {
+        width: 100px;
+        height: 100px;
+      }
+      .product-details h3 {
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo-container">
+        <div class="logo">
+          <img style="width: 100%; height: 100%; object-fit: contain;" src="products/xspace.png" alt="">
+        </div>
+      </div>
+      <h1>طلب منتجات</h1>
+      <p>اختر المنتجات التي تريدها</p>
+    </div>
+    <div class="content">
+      <div class="products-section">
+        <h2>المنتجات المتاحة</h2>
+        <div id="products-list" class="loading">جاري تحميل المنتجات...</div>
+      </div>
+
+      <div id="cart-section" style="display: none;">
+        <div class="cart-summary">
+          <h2 style="margin-bottom: 15px;">السلة</h2>
+          <div id="cart-items"></div>
+          <div class="total">
+            <span>المجموع:</span>
+            <span id="cart-total">0.00</span> <span>جنيه</span>
+          </div>
+        </div>
+        <button class="submit-btn" id="submit-order" disabled>إرسال الطلب</button>
+      </div>
+
+      <div id="message"></div>
+      
+      <!-- زر الشات -->
+      <button id="chat-toggle-btn" style="position: fixed; bottom: 20px; left: 20px; width: 60px; height: 60px; border-radius: 50%; background: #ff6b35; color: white; border: none; font-size: 24px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 1000;">💬</button>
+      
+      <!-- زر المكالمة -->
+      <button id="call-toggle-btn" style="position: fixed; bottom: 20px; left: 90px; width: 60px; height: 60px; border-radius: 50%; background: #28a745; color: white; border: none; font-size: 24px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 1000;">📞</button>
+      
+      <!-- نافذة المكالمة -->
+      <div id="call-window" style="display: none; position: fixed; bottom: 90px; left: 20px; width: 300px; max-width: calc(100vw - 40px); background: white; border-radius: 15px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); z-index: 999; padding: 20px; text-align: center;">
+        <div style="margin-bottom: 15px;">
+          <h3 style="margin: 0 0 10px 0; color: #333;">📞 المكالمة الصوتية</h3>
+          <div id="call-status" style="color: #666; font-size: 14px; margin: 10px 0;">جاهز للاتصال</div>
+        </div>
+        <div id="call-controls" style="display: flex; gap: 10px; justify-content: center; margin-top: 20px;">
+          <button id="call-start-btn" style="padding: 12px 24px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">اتصال</button>
+          <button id="call-end-btn" style="display: none; padding: 12px 24px; background: #dc3545; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">إنهاء</button>
+        </div>
+        <div id="call-audio-container" style="margin-top: 15px;">
+          <audio id="remote-audio" autoplay style="display: none;"></audio>
+        </div>
+        <button id="call-close-btn" style="position: absolute; top: 10px; right: 10px; background: transparent; border: none; color: #999; font-size: 24px; cursor: pointer; padding: 0; width: 30px; height: 30px;">×</button>
+      </div>
+      
+      <!-- نافذة الشات -->
+      <div id="chat-window" style="display: none; position: fixed; bottom: 90px; left: 20px; width: 350px; max-width: calc(100vw - 40px); height: 400px; background: white; border-radius: 15px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); z-index: 999; flex-direction: column;">
+        <div style="background: #ff6b35; color: white; padding: 15px; border-radius: 15px 15px 0 0; display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; font-size: 18px;">💬 المحادثة</h3>
+          <button id="chat-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; padding: 0; width: 30px; height: 30px;">×</button>
+        </div>
+        <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px;"></div>
+        <div style="padding: 15px; border-top: 1px solid #e0e0e0; display: flex; gap: 10px;">
+          <input type="text" id="chat-input" placeholder="اكتب رسالتك..." style="flex: 1; padding: 10px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+          <button id="chat-send-btn" style="padding: 10px 20px; background: #ff6b35; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px;">إرسال</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let products = [];
+    let cart = {};
+    let deviceId = null;
+
+    // الحصول على معرف الجهاز من URL
+    function getDeviceIdFromURL() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const deviceId = urlParams.get('device') || null;
+      if (!deviceId) {
+        showMessage('خطأ: لم يتم تحديد الجهاز. يرجى الوصول للصفحة من خلال رابط صحيح.', 'error');
+      }
+      return deviceId;
+    }
+
+    // التحقق من حالة الجهاز (هل لديه جلسة نشطة)
+    async function checkDeviceStatus() {
+      if (!deviceId) {
+        return false;
+      }
+      
+      try {
+        const response = await fetch(`/api/device-status?device_id=${deviceId}`);
+        if (!response.ok) {
+          throw new Error('فشل التحقق من حالة الجهاز');
+        }
+        const result = await response.json();
+        return result.active === true;
+      } catch (error) {
+        console.error('Error checking device status:', error);
+        return false;
+      }
+    }
+
+    // جلب المنتجات
+    async function loadProducts() {
+      try {
+        // التحقق من حالة الجهاز أولاً
+        const isActive = await checkDeviceStatus();
+        if (!isActive) {
+          document.getElementById('products-list').innerHTML = 
+            '<div class="error">⚠️ الجهاز غير نشط حالياً. يرجى تفعيل الجلسة أولاً قبل طلب المنتجات.</div>';
+          document.getElementById('cart-section').style.display = 'none';
+          return;
+        }
+        
+        const response = await fetch('/api/products');
+        if (!response.ok) throw new Error('فشل تحميل المنتجات');
+        products = await response.json();
+        renderProducts();
+      } catch (error) {
+        document.getElementById('products-list').innerHTML = 
+          '<div class="error">حدث خطأ في تحميل المنتجات. يرجى المحاولة مرة أخرى.</div>';
+      }
+    }
+
+    // عرض المنتجات
+    function renderProducts() {
+      const container = document.getElementById('products-list');
+      if (products.length === 0) {
+        container.innerHTML = '<div class="empty-cart">لا توجد منتجات متاحة حالياً</div>';
+        return;
+      }
+
+      container.className = 'products-list-grid';
+      container.innerHTML = products.map(product => {
+        const imgSrc = product.image ? `/products/${product.image}` : '/default-device.png';
+        const quantity = cart[product.id] || 0;
+        const note = cart[product.id + '_note'] || '';
+        return `
+          <div class="product-item">
+            <img src="${imgSrc}" alt="${product.name}" class="product-image" onerror="this.src='/default-device.png'">
+            <div class="product-details">
+              <h3>${product.name}</h3>
+              <div class="price">${product.price.toFixed(2)} جنيه</div>
+            </div>
+            <div class="product-controls">
+              <button class="quantity-btn" onclick="decreaseQuantity(${product.id})" ${quantity === 0 ? 'disabled' : ''}>-</button>
+              <span class="quantity-display">${quantity}</span>
+              <button class="quantity-btn" onclick="increaseQuantity(${product.id})">+</button>
+            </div>
+            <div class="product-note">
+              <textarea id="note-${product.id}" placeholder="ملاحظات على هذا المنتج (اختياري)" onchange="updateProductNote(${product.id})" ${quantity === 0 ? 'disabled' : ''}>${note}</textarea>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // زيادة الكمية
+    function increaseQuantity(productId) {
+      if (!cart[productId]) cart[productId] = 0;
+      cart[productId]++;
+      updateCart();
+      renderProducts();
+    }
+
+    // تقليل الكمية
+    function decreaseQuantity(productId) {
+      if (cart[productId] > 0) {
+        cart[productId]--;
+        if (cart[productId] === 0) {
+          delete cart[productId];
+          delete cart[productId + '_note'];
+        }
+        updateCart();
+        renderProducts();
+      }
+    }
+    
+    // تحديث ملاحظة المنتج
+    function updateProductNote(productId) {
+      const noteInput = document.getElementById(`note-${productId}`);
+      if (noteInput) {
+        cart[productId + '_note'] = noteInput.value.trim();
+      }
+    }
+
+    // تحديث السلة
+    function updateCart() {
+      const cartItems = Object.keys(cart).filter(id => cart[id] > 0);
+      const cartSection = document.getElementById('cart-section');
+      
+      if (cartItems.length === 0) {
+        cartSection.style.display = 'none';
+        document.getElementById('submit-order').disabled = true;
+        return;
+      }
+
+      cartSection.style.display = 'block';
+      
+      let total = 0;
+      const cartItemsHtml = cartItems.map(productId => {
+        const product = products.find(p => p.id == productId);
+        if (!product) return '';
+        const quantity = cart[productId];
+        const itemTotal = product.price * quantity;
+        total += itemTotal;
+        return `
+          <div class="cart-item">
+            <span>${product.name} × ${quantity}</span>
+            <span>${itemTotal.toFixed(2)} جنيه</span>
+          </div>
+        `;
+      }).join('');
+
+      document.getElementById('cart-items').innerHTML = cartItemsHtml;
+      document.getElementById('cart-total').textContent = total.toFixed(2);
+      
+      // تفعيل زر الإرسال إذا كانت هناك منتجات في السلة
+      document.getElementById('submit-order').disabled = cartItems.length === 0;
+    }
+
+    // إرسال الطلب
+    async function submitOrder() {
+      // التحقق من حالة الجهاز قبل إرسال الطلب
+      const isActive = await checkDeviceStatus();
+      if (!isActive) {
+        showMessage('⚠️ الجهاز غير نشط حالياً. يرجى تفعيل الجلسة أولاً قبل إرسال الطلب.', 'error');
+        return;
+      }
+      
+      const cartItems = Object.keys(cart).filter(id => cart[id] > 0);
+      if (cartItems.length === 0) {
+        showMessage('يرجى إضافة منتجات إلى السلة', 'error');
+        return;
+      }
+
+      const orderItems = cartItems.map(productId => {
+        const product = products.find(p => p.id == productId);
+        if (!product) {
+          console.error('Product not found:', productId);
+          return null;
+        }
+        return {
+          product_id: parseInt(product.id),
+          product_name: product.name,
+          quantity: parseInt(cart[productId]),
+          price: parseFloat(product.price),
+          note: (cart[productId + '_note'] || '').trim()
+        };
+      }).filter(item => item !== null);
+
+      // التحقق من أن هناك منتجات
+      if (orderItems.length === 0) {
+        showMessage('يرجى إضافة منتجات صحيحة إلى السلة', 'error');
+        return;
+      }
+
+      // التحقق من وجود device_id
+      if (!deviceId) {
+        showMessage('خطأ: لم يتم تحديد الجهاز. يرجى الوصول للصفحة من خلال رابط صحيح.', 'error');
+        return;
+      }
+      
+      // التحقق من أن هناك منتجات
+      if (orderItems.length === 0) {
+        showMessage('يرجى إضافة منتجات صحيحة إلى السلة', 'error');
+        return;
+      }
+
+      const total = parseFloat(document.getElementById('cart-total').textContent);
+      
+      // التحقق من صحة المجموع
+      if (isNaN(total) || total <= 0) {
+        showMessage('المجموع غير صحيح', 'error');
+        return;
+      }
+      
+      const order = {
+        device_id: deviceId,
+        items: orderItems,
+        total: total
+      };
+
+      try {
+        document.getElementById('submit-order').disabled = true;
+        document.getElementById('submit-order').textContent = 'جاري الإرسال...';
+
+        console.log('Sending order:', JSON.stringify(order, null, 2));
+
+        const response = await fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(order)
+        });
+
+        const result = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(result.error || 'فشل إرسال الطلب');
+        }
+
+        if (!result.success) {
+          throw new Error(result.error || 'فشل إرسال الطلب');
+        }
+
+        showMessage('تم إرسال الطلب بنجاح! شكراً لك', 'success');
+        
+        // إعادة تعيين النموذج
+        cart = {};
+        updateCart();
+        renderProducts();
+
+      } catch (error) {
+        console.error('Error submitting order:', error);
+        showMessage('حدث خطأ في إرسال الطلب: ' + (error.message || 'يرجى المحاولة مرة أخرى'), 'error');
+      } finally {
+        document.getElementById('submit-order').disabled = false;
+        document.getElementById('submit-order').textContent = 'إرسال الطلب';
+      }
+    }
+
+    // عرض رسالة
+    function showMessage(text, type) {
+      const messageDiv = document.getElementById('message');
+      messageDiv.className = type;
+      messageDiv.textContent = text;
+      messageDiv.style.display = 'block';
+      setTimeout(() => {
+        messageDiv.style.display = 'none';
+      }, 5000);
+    }
+
+    // أحداث
+    document.getElementById('submit-order').addEventListener('click', submitOrder);
+
+    // ========== دوال الشات ==========
+    let messagesInterval = null;
+    
+    // جلب الرسائل
+    async function loadMessages() {
+      if (!deviceId) return;
+      
+      try {
+        const response = await fetch(`/api/messages?device_id=${deviceId}`);
+        if (!response.ok) throw new Error('فشل جلب الرسائل');
+        const messages = await response.json();
+        renderMessages(messages);
+      } catch (error) {
+        console.error('Error loading messages:', error);
+      }
+    }
+    
+    // عرض الرسائل
+    function renderMessages(messages) {
+      const container = document.getElementById('chat-messages');
+      if (!container) return;
+      
+      container.innerHTML = messages.map(msg => {
+        const isCustomer = msg.sender === 'customer';
+        const time = new Date(msg.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+        return `
+          <div style="display: flex; justify-content: ${isCustomer ? 'flex-end' : 'flex-start'};">
+            <div style="max-width: 70%; background: ${isCustomer ? '#ff6b35' : '#f0f0f0'}; color: ${isCustomer ? 'white' : '#333'}; padding: 10px 15px; border-radius: 15px; word-wrap: break-word;">
+              <div style="font-size: 14px; margin-bottom: 5px;">${msg.message}</div>
+              <div style="font-size: 11px; opacity: 0.7; text-align: ${isCustomer ? 'left' : 'right'};">${time}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      
+      // التمرير للأسفل
+      container.scrollTop = container.scrollHeight;
+    }
+    
+    // إرسال رسالة
+    async function sendMessage() {
+      const input = document.getElementById('chat-input');
+      const message = input.value.trim();
+      
+      if (!message || !deviceId) return;
+      
+      try {
+        const response = await fetch('/api/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_id: deviceId, message })
+        });
+        
+        if (!response.ok) throw new Error('فشل إرسال الرسالة');
+        
+        input.value = '';
+        loadMessages(); // إعادة تحميل الرسائل
+      } catch (error) {
+        console.error('Error sending message:', error);
+        showMessage('حدث خطأ في إرسال الرسالة', 'error');
+      }
+    }
+    
+    // أحداث الشات
+    document.getElementById('chat-toggle-btn').addEventListener('click', () => {
+      const chatWindow = document.getElementById('chat-window');
+      chatWindow.style.display = chatWindow.style.display === 'none' ? 'flex' : 'none';
+      if (chatWindow.style.display === 'flex') {
+        loadMessages();
+        // تحديث الرسائل كل 3 ثواني
+        if (messagesInterval) clearInterval(messagesInterval);
+        messagesInterval = setInterval(loadMessages, 3000);
+      } else {
+        if (messagesInterval) clearInterval(messagesInterval);
+      }
+    });
+    
+    document.getElementById('chat-close-btn').addEventListener('click', () => {
+      document.getElementById('chat-window').style.display = 'none';
+      if (messagesInterval) clearInterval(messagesInterval);
+    });
+    
+    document.getElementById('chat-send-btn').addEventListener('click', sendMessage);
+    document.getElementById('chat-input').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') sendMessage();
+    });
+    
+    // ========== دوال المكالمة الصوتية ==========
+    let voiceWS = null;
+    let peerConnection = null;
+    let localStream = null;
+    let remoteStream = null;
+    let isCallActive = false;
+    const VOICE_WS_URL = `ws://${window.location.hostname}:3001`;
+    
+    // تهيئة WebSocket للمكالمات
+    function initVoiceWebSocket() {
+      if (voiceWS && voiceWS.readyState === WebSocket.OPEN) return;
+      
+      voiceWS = new WebSocket(VOICE_WS_URL);
+      
+      voiceWS.onopen = () => {
+        console.log('Voice WebSocket connected');
+        // تسجيل العميل
+        voiceWS.send(JSON.stringify({
+          type: 'register',
+          deviceId: deviceId,
+          role: 'customer'
+        }));
+      };
+      
+      voiceWS.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        handleVoiceMessage(data);
+      };
+      
+      voiceWS.onerror = (error) => {
+        console.error('Voice WebSocket error:', error);
+        showMessage('خطأ في الاتصال بالمكالمة', 'error');
+      };
+      
+      voiceWS.onclose = () => {
+        console.log('Voice WebSocket disconnected');
+        // إعادة الاتصال بعد 3 ثواني
+        setTimeout(() => {
+          if (!isCallActive) {
+            initVoiceWebSocket();
+          }
+        }, 3000);
+      };
+    }
+    
+    // معالجة رسائل المكالمة
+    async function handleVoiceMessage(data) {
+      const { type, offer, answer, candidate } = data;
+      
+      if (type === 'call-accepted') {
+        document.getElementById('call-status').textContent = 'تم قبول المكالمة...';
+        await startCall();
+      } else if (type === 'call-rejected') {
+        document.getElementById('call-status').textContent = 'تم رفض المكالمة';
+        endCall();
+        setTimeout(() => {
+          document.getElementById('call-status').textContent = 'جاهز للاتصال';
+        }, 3000);
+      } else if (type === 'offer') {
+        await handleOffer(offer);
+      } else if (type === 'answer') {
+        await handleAnswer(answer);
+      } else if (type === 'ice-candidate') {
+        await handleIceCandidate(candidate);
+      } else if (type === 'call-ended') {
+        endCall();
+        document.getElementById('call-status').textContent = 'تم إنهاء المكالمة';
+      }
+    }
+    
+    // بدء المكالمة
+    async function startCall() {
+      try {
+        // التحقق من وجود navigator.mediaDevices
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          showMessage('المتصفح لا يدعم الوصول للميكروفون. يرجى استخدام متصفح حديث.', 'error');
+          endCall();
+          return;
+        }
+        
+        document.getElementById('call-status').textContent = 'جاري طلب الوصول للميكروفون...';
+        
+        // الحصول على الصوت من الميكروفون
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+        } catch (mediaError) {
+          console.error('Media access error:', mediaError);
+          let errorMsg = 'فشل الوصول للميكروفون. ';
+          if (mediaError.name === 'NotAllowedError' || mediaError.name === 'PermissionDeniedError') {
+            errorMsg += 'يرجى السماح بالوصول للميكروفون من إعدادات المتصفح.';
+          } else if (mediaError.name === 'NotFoundError' || mediaError.name === 'DevicesNotFoundError') {
+            errorMsg += 'لم يتم العثور على ميكروفون متصل.';
+          } else if (mediaError.name === 'NotReadableError' || mediaError.name === 'TrackStartError') {
+            errorMsg += 'الميكروفون مستخدم من قبل تطبيق آخر.';
+          } else {
+            errorMsg += 'حدث خطأ غير متوقع: ' + mediaError.message;
+          }
+          showMessage(errorMsg, 'error');
+          endCall();
+          return;
+        }
+        
+        if (!localStream || localStream.getAudioTracks().length === 0) {
+          showMessage('لم يتم العثور على ميكروفون متاح.', 'error');
+          endCall();
+          return;
+        }
+        
+        document.getElementById('call-status').textContent = 'جاري إعداد المكالمة...';
+        
+        // إنشاء PeerConnection
+        const configuration = {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' }
+          ]
+        };
+        peerConnection = new RTCPeerConnection(configuration);
+        
+        // إضافة المسار المحلي
+        localStream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, localStream);
+        });
+        
+        // معالجة المسار البعيد
+        peerConnection.ontrack = (event) => {
+          remoteStream = event.streams[0];
+          const remoteAudio = document.getElementById('remote-audio');
+          remoteAudio.srcObject = remoteStream;
+          remoteAudio.style.display = 'block';
+          document.getElementById('call-status').textContent = 'المكالمة جارية';
+        };
+        
+        // معالجة ICE candidates
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate && voiceWS && voiceWS.readyState === WebSocket.OPEN) {
+            voiceWS.send(JSON.stringify({
+              type: 'ice-candidate',
+              deviceId: deviceId,
+              role: 'customer',
+              candidate: event.candidate,
+              targetDeviceId: deviceId
+            }));
+          }
+        };
+        
+        // معالجة أخطاء الاتصال
+        peerConnection.oniceconnectionstatechange = () => {
+          console.log('ICE connection state:', peerConnection.iceConnectionState);
+          if (peerConnection.iceConnectionState === 'failed' || peerConnection.iceConnectionState === 'disconnected') {
+            showMessage('فشل الاتصال. جاري إعادة المحاولة...', 'error');
+          }
+        };
+        
+        // إنشاء offer
+        const offer = await peerConnection.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: false
+        });
+        await peerConnection.setLocalDescription(offer);
+        
+        if (voiceWS && voiceWS.readyState === WebSocket.OPEN) {
+          voiceWS.send(JSON.stringify({
+            type: 'offer',
+            deviceId: deviceId,
+            role: 'customer',
+            offer: offer,
+            targetDeviceId: deviceId
+          }));
+        } else {
+          showMessage('فقد الاتصال بالخادم. يرجى المحاولة مرة أخرى.', 'error');
+          endCall();
+          return;
+        }
+        
+        isCallActive = true;
+        document.getElementById('call-start-btn').style.display = 'none';
+        document.getElementById('call-end-btn').style.display = 'inline-block';
+        document.getElementById('call-status').textContent = 'جاري الاتصال...';
+      } catch (error) {
+        console.error('Error starting call:', error);
+        showMessage('خطأ في بدء المكالمة: ' + error.message, 'error');
+        endCall();
+      }
+    }
+    
+    // معالجة offer
+    async function handleOffer(offer) {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          showMessage('المتصفح لا يدعم الوصول للميكروفون.', 'error');
+          endCall();
+          return;
+        }
+        
+        if (!localStream) {
+          try {
+            localStream = await navigator.mediaDevices.getUserMedia({ 
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+              }
+            });
+          } catch (mediaError) {
+            console.error('Media access error:', mediaError);
+            showMessage('فشل الوصول للميكروفون. يرجى السماح بالوصول للميكروفون.', 'error');
+            endCall();
+            return;
+          }
+        }
+        
+        const configuration = {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' }
+          ]
+        };
+        peerConnection = new RTCPeerConnection(configuration);
+        
+        localStream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, localStream);
+        });
+        
+        peerConnection.ontrack = (event) => {
+          remoteStream = event.streams[0];
+          const remoteAudio = document.getElementById('remote-audio');
+          remoteAudio.srcObject = remoteStream;
+          remoteAudio.style.display = 'block';
+        };
+        
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            voiceWS.send(JSON.stringify({
+              type: 'ice-candidate',
+              deviceId: deviceId,
+              role: 'customer',
+              candidate: event.candidate,
+              targetDeviceId: deviceId
+            }));
+          }
+        };
+        
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        
+        voiceWS.send(JSON.stringify({
+          type: 'answer',
+          deviceId: deviceId,
+          role: 'customer',
+          answer: answer,
+          targetDeviceId: deviceId
+        }));
+        
+        isCallActive = true;
+        document.getElementById('call-start-btn').style.display = 'none';
+        document.getElementById('call-end-btn').style.display = 'inline-block';
+        document.getElementById('call-status').textContent = 'المكالمة جارية';
+      } catch (error) {
+        console.error('Error handling offer:', error);
+        showMessage('خطأ في معالجة المكالمة', 'error');
+        endCall();
+      }
+    }
+    
+    // معالجة answer
+    async function handleAnswer(answer) {
+      try {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        document.getElementById('call-status').textContent = 'المكالمة جارية';
+      } catch (error) {
+        console.error('Error handling answer:', error);
+        endCall();
+      }
+    }
+    
+    // معالجة ICE candidate
+    async function handleIceCandidate(candidate) {
+      try {
+        if (peerConnection && candidate) {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      } catch (error) {
+        console.error('Error handling ICE candidate:', error);
+      }
+    }
+    
+    // إنهاء المكالمة
+    function endCall() {
+      isCallActive = false;
+      
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+      
+      if (remoteStream) {
+        remoteStream.getTracks().forEach(track => track.stop());
+        remoteStream = null;
+      }
+      
+      const remoteAudio = document.getElementById('remote-audio');
+      if (remoteAudio) {
+        remoteAudio.srcObject = null;
+        remoteAudio.style.display = 'none';
+      }
+      
+      if (voiceWS && voiceWS.readyState === WebSocket.OPEN) {
+        voiceWS.send(JSON.stringify({
+          type: 'call-ended',
+          deviceId: deviceId,
+          role: 'customer',
+          targetDeviceId: deviceId
+        }));
+      }
+      
+      document.getElementById('call-start-btn').style.display = 'inline-block';
+      document.getElementById('call-end-btn').style.display = 'none';
+      document.getElementById('call-status').textContent = 'جاهز للاتصال';
+    }
+    
+    // أحداث المكالمة
+    document.getElementById('call-toggle-btn')?.addEventListener('click', () => {
+      const callWindow = document.getElementById('call-window');
+      if (callWindow.style.display === 'none') {
+        callWindow.style.display = 'block';
+        if (!voiceWS || voiceWS.readyState !== WebSocket.OPEN) {
+          initVoiceWebSocket();
+        }
+      } else {
+        callWindow.style.display = 'none';
+      }
+    });
+    
+    document.getElementById('call-close-btn')?.addEventListener('click', () => {
+      document.getElementById('call-window').style.display = 'none';
+      if (!isCallActive) {
+        endCall();
+      }
+    });
+    
+    document.getElementById('call-start-btn')?.addEventListener('click', async () => {
+      if (!deviceId) {
+        showMessage('خطأ: لم يتم تحديد الجهاز', 'error');
+        return;
+      }
+      
+      if (!voiceWS || voiceWS.readyState !== WebSocket.OPEN) {
+        showMessage('جاري الاتصال...', 'error');
+        initVoiceWebSocket();
+        setTimeout(() => {
+          if (voiceWS && voiceWS.readyState === WebSocket.OPEN) {
+            requestCall();
+          } else {
+            showMessage('فشل الاتصال. يرجى المحاولة مرة أخرى', 'error');
+          }
+        }, 1000);
+      } else {
+        requestCall();
+      }
+    });
+    
+    document.getElementById('call-end-btn')?.addEventListener('click', () => {
+      endCall();
+    });
+    
+    // طلب المكالمة
+    function requestCall() {
+      if (voiceWS && voiceWS.readyState === WebSocket.OPEN) {
+        voiceWS.send(JSON.stringify({
+          type: 'call-request',
+          deviceId: deviceId,
+          role: 'customer',
+          targetDeviceId: deviceId
+        }));
+        document.getElementById('call-status').textContent = 'جاري طلب المكالمة...';
+      }
+    }
+    
+    // تحميل المنتجات عند تحميل الصفحة
+    deviceId = getDeviceIdFromURL();
+    loadProducts();
+  </script>
+</body>
+</html>
+
+
+

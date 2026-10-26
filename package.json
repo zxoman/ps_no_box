@@ -1,0 +1,34 @@
+{
+  "name": "ps-management",
+  "version": "1.0.0",
+  "description": "برنامج إدارة أجهزة الألعاب والجلسات",
+  "author": "اسمك أو اسم شركتك",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.yourcompany.psmanagement",
+    "productName": "PS Management",
+    "files": [
+      "**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "dependencies": {
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.2",
+    "node-hid": "^2.1.2",
+    "node-telegram-bot-api": "^2.1.0",
+    "sqlite3": "^6.0.1",
+    "ws": "^8.18.3",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^44.9.1",
+    "electron-builder": "^26.0.12"
+  }
+}

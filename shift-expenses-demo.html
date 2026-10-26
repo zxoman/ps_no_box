@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>حاسبة المصروفات في الشيفتات - تجريبي</title>
+    <link rel="stylesheet" href="shift-expenses-styles.css">
+    <style>
+        body {
+            font-family: 'Cairo', 'Arial', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #2c3e50;
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #7f8c8d;
+            font-size: 16px;
+        }
+        
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .input-group label {
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .input-group input {
+            padding: 10px;
+            border: 2px solid #ecf0f1;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .input-group input:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #7f8c8d;
+        }
+        
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>حاسبة المصروفات في الشيفتات</h1>
+            <p>أداة لحساب وإدارة المصروفات في الشيفتات المختلفة</p>
+        </div>
+        
+        <div class="controls">
+            <div class="input-group">
+                <label for="shiftId">معرف الشيفت:</label>
+                <input type="number" id="shiftId" placeholder="أدخل معرف الشيفت" value="1">
+            </div>
+            
+            <div class="input-group">
+                <label for="startDate">تاريخ البداية:</label>
+                <input type="date" id="startDate">
+            </div>
+            
+            <div class="input-group">
+                <label for="endDate">تاريخ النهاية:</label>
+                <input type="date" id="endDate">
+            </div>
+            
+            <button class="calculate-btn" onclick="calculateShiftExpenses()">
+                حساب مصروفات الشيفت
+            </button>
+            
+            <button class="calculate-btn" onclick="calculateAllShiftsExpenses()">
+                حساب جميع الشيفتات
+            </button>
+            
+            <button class="calculate-btn" onclick="calculateExpensesStatistics()">
+                إحصائيات المصروفات
+            </button>
+        </div>
+        
+        <div id="results">
+            <div style="text-align: center; color: #7f8c8d; padding: 40px;">
+                اختر إحدى الخيارات أعلاه لعرض النتائج
+            </div>
+        </div>
+    </div>
+
+    <!-- محاكاة APIs (للتجربة فقط) -->
+    <script>
+        // محاكاة APIs للاختبار
+        window.expensesAPI = {
+            getShiftExpenses: async (shift_id) => {
+                // محاكاة بيانات تجريبية
+                return {
+                    success: true,
+                    data: {
+                        shift_id: shift_id,
+                        shift_start: Date.now() - 8 * 60 * 60 * 1000, // 8 ساعات مضت
+                        shift_end: Date.now(),
+                        total_expenses: 150.50,
+                        expenses_count: 5,
+                        shift_duration_hours: 8,
+                        expenses: [
+                            {
+                                id: 1,
+                                title: "مصروفات كهرباء",
+                                amount: 50.00,
+                                category: "مرافق",
+                                frequency: "يومي",
+                                date: Date.now() - 4 * 60 * 60 * 1000,
+                                description: "فاتورة الكهرباء"
+                            },
+                            {
+                                id: 2,
+                                title: "صيانة جهاز",
+                                amount: 75.00,
+                                category: "صيانة",
+                                frequency: "غير محدد",
+                                date: Date.now() - 2 * 60 * 60 * 1000,
+                                description: "إصلاح جهاز الكمبيوتر"
+                            },
+                            {
+                                id: 3,
+                                title: "مشروبات",
+                                amount: 25.50,
+                                category: "مشروبات",
+                                frequency: "يومي",
+                                date: Date.now() - 1 * 60 * 60 * 1000,
+                                description: "مشروبات للعملاء"
+                            }
+                        ],
+                        expenses_by_category: {
+                            "مرافق": { total: 50.00, count: 1, items: [] },
+                            "صيانة": { total: 75.00, count: 1, items: [] },
+                            "مشروبات": { total: 25.50, count: 1, items: [] }
+                        },
+                        expenses_by_frequency: {
+                            "يومي": { total: 75.50, count: 2 },
+                            "غير محدد": { total: 75.00, count: 1 }
+                        }
+                    }
+                };
+            },
+            
+            getAllShiftsExpenses: async () => {
+                return {
+                    success: true,
+                    data: {
+                        total_shifts: 3,
+                        total_expenses: 450.75,
+                        shifts_with_expenses: 3,
+                        shifts_expenses: [
+                            {
+                                shift_id: 1,
+                                shift_start: Date.now() - 24 * 60 * 60 * 1000,
+                                shift_end: Date.now() - 16 * 60 * 60 * 1000,
+                                total_expenses: 150.50,
+                                expenses_count: 5,
+                                expenses: []
+                            },
+                            {
+                                shift_id: 2,
+                                shift_start: Date.now() - 16 * 60 * 60 * 1000,
+                                shift_end: Date.now() - 8 * 60 * 60 * 1000,
+                                total_expenses: 200.25,
+                                expenses_count: 3,
+                                expenses: []
+                            },
+                            {
+                                shift_id: 3,
+                                shift_start: Date.now() - 8 * 60 * 60 * 1000,
+                                shift_end: null,
+                                total_expenses: 100.00,
+                                expenses_count: 2,
+                                expenses: []
+                            }
+                        ]
+                    }
+                };
+            },
+            
+            getExpensesStatistics: async (startDate, endDate) => {
+                return {
+                    success: true,
+                    data: {
+                        total_expenses: 450.75,
+                        total_count: 10,
+                        average_expense: 45.075,
+                        max_expense: 100.00,
+                        min_expense: 5.50,
+                        expenses_by_category: {
+                            "مرافق": { total: 100.00, count: 2, percentage: "22.22" },
+                            "صيانة": { total: 150.00, count: 3, percentage: "33.33" },
+                            "مشروبات": { total: 75.50, count: 2, percentage: "16.78" },
+                            "أخرى": { total: 125.25, count: 3, percentage: "27.78" }
+                        },
+                        expenses_by_frequency: {
+                            "يومي": { total: 200.50, count: 5, percentage: "44.50" },
+                            "أسبوعي": { total: 150.00, count: 2, percentage: "33.30" },
+                            "غير محدد": { total: 100.25, count: 3, percentage: "22.25" }
+                        },
+                        date_range: {
+                            start: startDate,
+                            end: endDate
+                        }
+                    }
+                };
+            }
+        };
+        
+        window.shiftsAPI = window.expensesAPI; // نفس الـ APIs
+    </script>
+    
+    <!-- تحميل حاسبة المصروفات -->
+    <script src="shift-expenses-calculator.js"></script>
+    
+    <script>
+        // دوال للتفاعل مع الواجهة
+        async function calculateShiftExpenses() {
+            const shiftId = document.getElementById('shiftId').value;
+            const resultsContainer = document.getElementById('results');
+            
+            if (!shiftId) {
+                alert('يرجى إدخال معرف الشيفت');
+                return;
+            }
+            
+            resultsContainer.innerHTML = '<div class="loading">جاري حساب المصروفات...</div>';
+            
+            try {
+                await shiftExpensesCalculator.displayShiftExpensesReport(parseInt(shiftId), resultsContainer);
+            } catch (error) {
+                resultsContainer.innerHTML = `<div class="error">خطأ: ${error.message}</div>`;
+            }
+        }
+        
+        async function calculateAllShiftsExpenses() {
+            const resultsContainer = document.getElementById('results');
+            resultsContainer.innerHTML = '<div class="loading">جاري حساب مصروفات جميع الشيفتات...</div>';
+            
+            try {
+                await shiftExpensesCalculator.displayAllShiftsExpensesReport(resultsContainer);
+            } catch (error) {
+                resultsContainer.innerHTML = `<div class="error">خطأ: ${error.message}</div>`;
+            }
+        }
+        
+        async function calculateExpensesStatistics() {
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const resultsContainer = document.getElementById('results');
+            
+            resultsContainer.innerHTML = '<div class="loading">جاري حساب الإحصائيات...</div>';
+            
+            try {
+                const start = startDate ? new Date(startDate) : null;
+                const end = endDate ? new Date(endDate) : null;
+                
+                await shiftExpensesCalculator.displayExpensesStatistics(resultsContainer, start, end);
+            } catch (error) {
+                resultsContainer.innerHTML = `<div class="error">خطأ: ${error.message}</div>`;
+            }
+        }
+        
+        // تعيين التواريخ الافتراضية
+        document.addEventListener('DOMContentLoaded', function() {
+            const today = new Date();
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+            
+            document.getElementById('startDate').value = yesterday.toISOString().split('T')[0];
+            document.getElementById('endDate').value = today.toISOString().split('T')[0];
+        });
+    </script>
+</body>
+</html>
+
+
+
