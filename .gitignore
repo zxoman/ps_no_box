@@ -18,3 +18,6 @@ builder-debug.yml
 builder-effective-config.yaml
 # أدوات توليد أكواد التفعيل — لا ترفعها للريبو العام
 New folder/
+
+# أداة توليد أكواد التفعيل — تتشغل عند المالك فقط
+activation_code_generator.js

@@ -41,7 +41,15 @@ let voiceClients = {}; // { deviceId: { ws, role: 'customer'|'admin' } }
 const TRIAL_DAYS = 14;
 // أيام فتح مجاني تلقائي قبل طلب كود التفعيل
 const FREE_DAYS_BEFORE_CODE = 2;
-const TRIAL_START_FILE = path.join(__dirname, 'trial_start.txt');
+// مهم: ملف بداية التجربة لازم يكون في AppData (قابل للكتابة) مش جوه البرنامج
+// لأن الملف اللي جوه حزمة التطبيق للقراءة فقط وبيفضل بتاريخ البناء → نظام اليومين ما كانش بيعمل
+const TRIAL_START_FILE = path.join(app.getPath('userData'), 'trial_start.txt');
+
+// كود المالك (يفعّل البرنامج بدون توليد كود)
+const MASTER_ACTIVATION_CODE = 'ziad';
+const MASTER_ACTIVATION_DAYS = 365;
+// تسامح مع فروق الساعة البسيطة (توقيت صيفي/تصحيح تلقائي) = 12 ساعة
+const TAMPER_TOLERANCE_MS = 12 * 60 * 60 * 1000;
 
 // التعديل هنا: حفظ ملف التفعيل في مجلد AppData الخاص بالمستخدم
 const ACTIVATION_INFO_FILE = path.join(app.getPath('userData'), 'activation_info.txt');
@@ -50,7 +58,7 @@ const ACTIVATION_INFO_FILE = path.join(app.getPath('userData'), 'activation_info
 const TRIAL_RUNS_FILE = path.join(app.getPath('userData'), 'trial_runs.txt');
 
 
-// دالة لتخزين تاريخ التشغيل
+// دالة لتخزين تاريخ التشغيل (بنحتفظ بآخر 500 تشغيل بس)
 function logTrialRun(now) {
   let runs = [];
   if (fs.existsSync(TRIAL_RUNS_FILE)) {
@@ -59,7 +67,12 @@ function logTrialRun(now) {
     } catch (e) { runs = []; }
   }
   runs.push(now);
-  fs.writeFileSync(TRIAL_RUNS_FILE, runs.join('\n'), { encoding: 'utf-8' });
+  if (runs.length > 500) runs = runs.slice(-500);
+  try {
+    fs.writeFileSync(TRIAL_RUNS_FILE, runs.join('\n'), { encoding: 'utf-8' });
+  } catch (e) {
+    console.error('فشل حفظ سجل التشغيل:', e.message);
+  }
 }
 
 // دالة للتحقق من التلاعب
@@ -67,8 +80,20 @@ function isDateTampered(now) {
   if (!fs.existsSync(TRIAL_RUNS_FILE)) return false;
   try {
     const runs = fs.readFileSync(TRIAL_RUNS_FILE, 'utf-8').split('\n').map(Number).filter(Boolean);
-    return runs.some(run => now < run);
+    if (!runs.length) return false;
+    // بنسمح بفروق بسيطة (توقيت صيفي/تصحيح تلقائي للساعة) ومش بنحجب بسببها
+    return now < Math.max(...runs) - TAMPER_TOLERANCE_MS;
   } catch (e) { return false; }
+}
+
+// إصلاح سجل التشغيل لو الساعة كانت مظبوطة غلط (بيمسح التواريخ المستقبلية)
+function healTrialRuns(realNow) {
+  try {
+    if (!fs.existsSync(TRIAL_RUNS_FILE)) return;
+    const runs = fs.readFileSync(TRIAL_RUNS_FILE, 'utf-8').split('\n').map(Number).filter(Boolean);
+    const fixed = runs.filter(r => r <= realNow + TAMPER_TOLERANCE_MS);
+    fs.writeFileSync(TRIAL_RUNS_FILE, fixed.join('\n'), { encoding: 'utf-8' });
+  } catch (e) { /* تجاهل */ }
 }
 // --- نهاية الحماية ---
 
@@ -76,12 +101,18 @@ function getTrialInfo() {
   let start = null;
   if (fs.existsSync(TRIAL_START_FILE)) {
     try {
-      start = parseInt(fs.readFileSync(TRIAL_START_FILE, 'utf-8'));
+      const parsed = parseInt(fs.readFileSync(TRIAL_START_FILE, 'utf-8'));
+      if (Number.isFinite(parsed) && parsed > 0) start = parsed;
     } catch (e) { start = null; }
   }
   if (!start) {
     start = Date.now();
-    fs.writeFileSync(TRIAL_START_FILE, String(start));
+    try {
+      fs.writeFileSync(TRIAL_START_FILE, String(start));
+    } catch (e) {
+      // حتى لو فشل الحفظ، منرجعش خطأ — البرنامج يكمل بالتاريخ الحالي
+      console.error('فشل حفظ تاريخ بداية التجربة:', e.message);
+    }
   }
   return start;
 }
@@ -131,6 +162,12 @@ async function isTrialExpiredOnline() {
   if (!now) now = Date.now(); // fallback
   const diffDays = Math.floor((now - start) / (1000 * 60 * 60 * 24));
   return diffDays >= TRIAL_DAYS;
+}
+
+// الوقت الموثوق: وقت الإنترنت لو متاح، وإلا وقت الجهاز
+async function getTrustedNow() {
+  const online = await getOnlineDate();
+  return online || Date.now();
 }
 
 // تهيئة قاعدة البيانات
@@ -810,11 +847,18 @@ function getTrialDbInfo(cb) {
   });
 }
 function setTrialDbInfo(start, last_checked, trial_days, cb) {
-  db.run('INSERT OR REPLACE INTO trial_info (id, start, last_checked, trial_days) VALUES (1, ?, ?, ?)', [start, last_checked, trial_days], cb);
+  // مهم: INSERT OR REPLACE كان بيمسح عمود activation_code — بنستخدم INSERT + UPDATE
+  db.run('INSERT OR IGNORE INTO trial_info (id) VALUES (1)', () => {
+    db.run('UPDATE trial_info SET start = ?, last_checked = ?, trial_days = ? WHERE id = 1',
+      [start, last_checked, trial_days], cb);
+  });
 }
 
 function setTrialActivationCode(code, cb) {
-  db.run('INSERT OR REPLACE INTO trial_info (id, activation_code) VALUES (1, ?)', [code], cb);
+  // نفس الملاحظة: ما نمسحش start/last_checked/trial_days
+  db.run('INSERT OR IGNORE INTO trial_info (id) VALUES (1)', () => {
+    db.run('UPDATE trial_info SET activation_code = ? WHERE id = 1', [code], cb);
+  });
 }
 function getTrialActivationCode(cb) {
   db.get('SELECT activation_code FROM trial_info WHERE id = 1', (err, row) => {
@@ -822,59 +866,58 @@ function getTrialActivationCode(cb) {
   });
 }
 
-async function isTrialExpiredDb() {
-  return new Promise((resolve, reject) => {
-    // إذا كان ملف التفعيل الخارجي موجودًا، اعتمد عليه
-    if (fs.existsSync(ACTIVATION_INFO_FILE)) {
-      try {
-        const content = fs.readFileSync(ACTIVATION_INFO_FILE, 'utf-8');
-        const lines = content.split(/\r?\n/);
-        let start = null, trial_days = null, code = null;
-        for (const line of lines) {
-          if (line.startsWith('Start Date:')) start = parseInt(line.split(':')[1].trim());
-          if (line.startsWith('Trial Days:')) trial_days = parseInt(line.split(':')[1].trim());
-          if (line.startsWith('Activation Code:')) code = line.split(':')[1].trim();
-        }
-        if (!start || !trial_days || !code) return resolve(true); // اعتبرها منتهية إذا الملف غير مكتمل
-        getOnlineDate().then(now => {
-          if (!now) now = Date.now();
-          const diffDays = Math.floor((now - start) / (1000 * 60 * 60 * 24));
-          return resolve(diffDays >= trial_days);
-        }).catch(() => resolve(true));
-        return;
-      } catch (e) {
-        return resolve(true); // إذا حدث خطأ في القراءة اعتبرها منتهية
-      }
+// يقرأ ملف التفعيل، ويرجع null لو مش موجود أو ناقص/تالف (بدل ما يعتبره انتهى)
+function readActivationFile() {
+  try {
+    if (!fs.existsSync(ACTIVATION_INFO_FILE)) return null;
+    const content = fs.readFileSync(ACTIVATION_INFO_FILE, 'utf-8');
+    const lines = content.split(/\r?\n/);
+    let start = null, trial_days = null, code = null;
+    for (const line of lines) {
+      if (line.startsWith('Start Date:')) start = parseInt(line.split(':')[1].trim());
+      if (line.startsWith('Trial Days:')) trial_days = parseInt(line.split(':')[1].trim());
+      if (line.startsWith('Activation Code:')) code = line.split(':').slice(1).join(':').trim();
     }
-    // إذا لم يوجد الملف، استخدم قاعدة البيانات كالمعتاد
-    getTrialDbInfo(async (err, row) => {
-      let now = await getOnlineDate();
-      if (!now) now = Date.now();
-      if (err) return resolve(true); // إذا فشل الاستعلام، اعتبرها منتهية
-      if (!row || !row.activation_code) {
-        // أول FREE_DAYS_BEFORE_CODE يوم: يفتح بدون كود، بعدها يطلب التفعيل
-        const freeStart = getTrialInfo();
-        const freeDiffDays = Math.floor((now - freeStart) / (1000 * 60 * 60 * 24));
-        if (freeDiffDays < FREE_DAYS_BEFORE_CODE) {
-          resolve(false);
-          return;
-        }
-        resolve('need_activation');
-        return;
-      }
-      // منع التلاعب: إذا التاريخ الحالي أقل من آخر تحقق، اعتبرها تلاعب
-      if (now < row.last_checked) {
-        resolve(true);
-        return;
-      }
-      // استخرج مدة التجربة من قاعدة البيانات
-      const trialDays = row.trial_days || 14; // افتراضي 14 إذا لم يوجد
-      const diffDays = Math.floor((now - row.start) / (1000 * 60 * 60 * 24));
-      setTrialDbInfo(row.start, now, trialDays, () => {
-        resolve(diffDays >= trialDays);
-      });
-    });
-  });
+    if (!start || !Number.isFinite(start) || !trial_days || trial_days <= 0 || !code) return null;
+    return { start, trial_days, code };
+  } catch (e) {
+    return null;
+  }
+}
+
+// الحالات: false = شغال | 'need_activation' = محتاج كود | true = منتهي
+async function isTrialExpiredDb() {
+  const now = await getTrustedNow();
+
+  // 1) ملف التفعيل الخارجي له الأولوية لو كامل
+  const act = readActivationFile();
+  if (act) {
+    if (now < act.start - TAMPER_TOLERANCE_MS) return true;
+    const diffDays = Math.floor((now - act.start) / (1000 * 60 * 60 * 24));
+    return diffDays >= act.trial_days;
+  }
+
+  // 2) قاعدة البيانات
+  const row = await new Promise((resolve) => getTrialDbInfo((err, r) => resolve(err ? null : r)));
+  const hasActivation = !!(row && row.activation_code && row.start && row.trial_days);
+
+  if (!hasActivation) {
+    // أول FREE_DAYS_BEFORE_CODE يوم: يفتح بدون كود، بعدها يطلب التفعيل
+    const freeStart = getTrialInfo();
+    const freeDiffDays = Math.floor((now - freeStart) / (1000 * 60 * 60 * 24));
+    if (freeDiffDays < FREE_DAYS_BEFORE_CODE) return false;
+    return 'need_activation';
+  }
+
+  // منع التلاعب: الساعة رجعت لورا بفرق كبير
+  if (now < row.start - TAMPER_TOLERANCE_MS) return true;
+  if (row.last_checked && now < row.last_checked - TAMPER_TOLERANCE_MS) return true;
+
+  const trialDays = row.trial_days;
+  const diffDays = Math.floor((now - row.start) / (1000 * 60 * 60 * 24));
+  const expired = diffDays >= trialDays;
+  await new Promise((resolve) => setTrialDbInfo(row.start, now, trialDays, resolve));
+  return expired;
 }
 
 // دالة لإضافة جهاز
@@ -1160,11 +1203,19 @@ app.whenReady().then(async () => {
   
   const now = Date.now();
   if (isDateTampered(now)) {
-    dialog.showErrorBox('خطأ في التاريخ', 'تم اكتشاف تلاعب في تاريخ الجهاز. يرجى تصحيح التاريخ وإعادة تشغيل البرنامج.');
-    app.exit(0);
-    return;
+    // بنحاول نصحح السجل من وقت الإنترنت بدل حجب البرنامج نهائياً
+    const onlineNow = await getOnlineDate();
+    if (onlineNow && onlineNow >= now - TAMPER_TOLERANCE_MS) {
+      healTrialRuns(onlineNow);
+      logTrialRun(onlineNow);
+    } else {
+      dialog.showErrorBox('خطأ في التاريخ', 'تم اكتشاف تلاعب في تاريخ الجهاز. يرجى تصحيح التاريخ وإعادة تشغيل البرنامج.');
+      app.exit(0);
+      return;
+    }
+  } else {
+    logTrialRun(now);
   }
-  logTrialRun(now);
   // --- نهاية الحماية ---
 
   let win = null;
@@ -1194,45 +1245,26 @@ app.whenReady().then(async () => {
   } catch (e) { }
   const trialStatus = await isTrialExpiredDb();
   if (trialStatus === 'need_activation') {
-    // تحقق إذا كان هناك تفعيل سابق وفترة فعالة
-    const trialInfoPromise = new Promise((resolve) => getTrialDbInfo((err, row) => resolve(row)));
-    const row = await trialInfoPromise;
-    if (row && row.activation_code && row.start && row.trial_days) {
-      let now = await getOnlineDate();
-      if (!now) now = Date.now();
-      const diffDays = Math.floor((now - row.start) / (1000 * 60 * 60 * 24));
-      if (diffDays < row.trial_days) {
-        // الفترة ما زالت فعالة، لا تظهر نافذة التفعيل
-        if (win) {
-          await win.webContents.executeJavaScript('window.hideTrialWaitModal && window.hideTrialWaitModal();');
-          win.close();
-        }
-        createWindow();
-        return;
-      }
-    }
-    // إذا لم يكن هناك تفعيل أو انتهت المدة، أظهر نافذة التفعيل
+    // لا يوجد تفعيل ساري (فترة اليومين المجانية انتهت أو مفيش كود) → نافذة التفعيل
     if (win) {
       await win.webContents.executeJavaScript('window.hideTrialWaitModal && window.hideTrialWaitModal();');
-      await win.webContents.executeJavaScript('window.showTrialActivationModal && window.showTrialActivationModal();');
+      await win.webContents.executeJavaScript(
+        `window.showTrialActivationModal && window.showTrialActivationModal('انتهت الفترة المجانية. يرجى إدخال كود التفعيل للاستمرار.');`
+      );
     }
     return;
   }
   if (trialStatus === true) {
+    // الفترة انتهت → نعرض نافذة التفعيل (مش بنقفل البرنامج) عشان يقدر يجدّد بكود جديد
     if (win) {
       await win.webContents.executeJavaScript('window.hideTrialWaitModal && window.hideTrialWaitModal();');
-      win.close();
+      await win.webContents.executeJavaScript(
+        `window.showTrialActivationModal && window.showTrialActivationModal('انتهت فترة التفعيل الحالية. يرجى إدخال كود تفعيل جديد للاستمرار.');`
+      );
+    } else {
+      dialog.showErrorBox('انتهت الفترة التجريبية', 'انتهت الفترة التجريبية. يرجى التواصل مع الدعم.');
+      app.exit(0);
     }
-    // حذف ملف التفعيل إذا كان موجوداً باستخدام fs.rmSync
-    if (fs.existsSync(ACTIVATION_INFO_FILE)) {
-      try {
-        fs.rmSync(ACTIVATION_INFO_FILE, { force: true });
-      } catch (e) {
-        console.error('فشل حذف ملف التفعيل:', e);
-      }
-    }
-    dialog.showErrorBox('انتهت الفترة التجريبية', `انتهت الفترة التجريبية. يرجى التواصل مع الدعم.`);
-    app.exit(0);
     return;
   }
   if (win) {
@@ -6634,9 +6666,13 @@ function getHardwareSerial() {
   } catch (e) { return 'UNKNOWN'; }
 }
 
-function generateActivationCode(serial) {
-  // مثال: استخدم آخر 6 أرقام من serial مع ثابت
-  return 'PS-' + (serial.replace(/[^A-Za-z0-9]/g, '').slice(-6) || '000000');
+function normalizeSerial6(serial) {
+  return (String(serial || '').replace(/[^A-Za-z0-9]/g, '').slice(-6) || '000000').toUpperCase();
+}
+
+// PS-XXXXXX-DAYS
+function generateActivationCode(serial, days = 30) {
+  return 'PS-' + normalizeSerial6(serial) + '-' + days;
 }
 
 function getActivationRequestCode() {
@@ -6649,49 +6685,56 @@ function getActivationRequestCode() {
 
 function saveActivationInfoToFile(code, days, start) {
   const content = `Activation Code: ${code}\nTrial Days: ${days}\nStart Date: ${start}\n`;
-  fs.writeFileSync(ACTIVATION_INFO_FILE, content, { encoding: 'utf-8' });
+  try {
+    fs.writeFileSync(ACTIVATION_INFO_FILE, content, { encoding: 'utf-8' });
+  } catch (e) {
+    console.error('فشل حفظ ملف التفعيل:', e.message);
+  }
 }
 
-ipcMain.handle('activate-trial', async (event, code) => {
-  // تحقق أولاً: إذا كانت الفترة التجريبية ما زالت فعالة، لا تسمح بإدخال كود جديد
-  if (code == "ziad") {
-    return true;
+// يقرأ كود التفعيل ويرجع عدد الأيام أو 0 لو الكود غير صالح
+function parseActivationCode(code) {
+  const clean = String(code || '').trim();
+  if (!clean) return 0;
+  if (clean.toLowerCase() === MASTER_ACTIVATION_CODE) return MASTER_ACTIVATION_DAYS;
+
+  const requestCode = getActivationRequestCode();
+  const serial6 = normalizeSerial6(getHardwareSerial());
+
+  // الصيغة 1: PS-XXXXXX-DAYS (سيريال الجهاز)
+  const m1 = clean.match(/^PS-([A-Za-z0-9]{6})-(\d{1,3})$/i);
+  if (m1) {
+    const days = parseInt(m1[2], 10);
+    if (!(days > 0 && days <= 999)) return 0;
+    return m1[1].toUpperCase() === serial6 ? days : 0;
   }
-  const trialInfoPromise = new Promise((resolve) => getTrialDbInfo((err, row) => resolve(row)));
-  const row = await trialInfoPromise;
-  if (row && row.activation_code && row.start && row.trial_days) {
-    // تحقق من انتهاء المدة
-    let now = await getOnlineDate();
-    if (!now) now = Date.now();
-    const diffDays = Math.floor((now - row.start) / (1000 * 60 * 60 * 24));
-    if (diffDays < row.trial_days) {
-      event.sender.send('trial-activated', false);
-      dialog.showErrorBox('غير مسموح', 'لا يمكن إدخال كود تفعيل جديد إلا بعد انتهاء الفترة التجريبية الحالية.');
-      return false;
-    }
+
+  // الصيغة 2: <كود الطلب>-DAYS (نفس الكود اللي بيظهر في نافذة التفعيل)
+  const m2 = clean.match(/^([A-Fa-f0-9]{16})-(\d{1,3})$/);
+  if (m2) {
+    const days = parseInt(m2[2], 10);
+    if (!(days > 0 && days <= 999)) return 0;
+    return m2[1].toUpperCase() === requestCode ? days : 0;
   }
-  const serial = getHardwareSerial();
-  // الكود المتوقع: PS-XXXXXX-30
-  const match = code.match(/^PS-([A-Za-z0-9]{6})-(\d{1,3})$/);
-  if (!match) {
-    event.sender.send('trial-activated', false);
-    return false;
-  }
-  const expected = 'PS-' + (serial.replace(/[^A-Za-z0-9]/g, '').slice(-6) || '000000');
-  const days = parseInt(match[2]);
-  if (code.startsWith(expected + '-') && days > 0 && days <= 999) {
-    const now = await getOnlineDate() || Date.now();
-    setTrialDbInfo(now, now, days, () => {
-      setTrialActivationCode(code, () => {
-        saveActivationInfoToFile(code, days, now);
-        event.sender.send('trial-activated', true);
-      });
-    });
-    return true;
-  } else {
-    event.sender.send('trial-activated', false);
-    return false;
-  }
+
+  return 0;
+}
+
+ipcMain.handle('activate-trial', async (event, rawCode) => {
+  const code = String(rawCode || '').trim();
+  const reply = (ok) => {
+    try { event.sender.send('trial-activated', ok); } catch (e) { }
+    return ok;
+  };
+
+  const days = parseActivationCode(code);
+  if (!days) return reply(false);
+
+  const now = await getTrustedNow();
+  await new Promise((resolve) => setTrialDbInfo(now, now, days, resolve));
+  await new Promise((resolve) => setTrialActivationCode(code, resolve));
+  saveActivationInfoToFile(code, days, now);
+  return reply(true);
 });
 
 // أرسل serial للواجهة لعرضه للمستخدم
