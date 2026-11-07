@@ -2744,7 +2744,7 @@
           </select>
         </label>
         <div id="edit-session-duration-area" style="display:none;margin-top:10px;">
-          <label>المدة الجديدة:<br>
+          <label>المدة المطلوبة (تُضاف من الآن — الوقت اللي اتلعب محفوظ):<br>
             <input type="number" id="edit-session-hours" min="0" max="12" value="1" style="width:50px;"> ساعة
             <input type="number" id="edit-session-minutes" min="0" max="59" value="0" style="width:50px;"> دقيقة
           </label>
@@ -3024,6 +3024,7 @@
     }
     // إضافة جهاز جديد
     document.getElementById('add-device-form').onsubmit = async function (e) {
+      if (!(await requirePerm('devices', 'add', 'ليس لديك صلاحية لإضافة جهاز'))) return;
       e.preventDefault();
       const name = document.getElementById('device-name').value.trim();
       const id = document.getElementById('device-id').value.trim();
@@ -3413,6 +3414,7 @@
     // بدء الجلسة
     document.getElementById('session-form').onsubmit = async function (e) {
       e.preventDefault();
+      if (!(await requirePerm('sessions', 'add', 'ليس لديك صلاحية لفتح جلسة'))) return;
 
       // التحقق من الوقت المنقضي منذ آخر ضغطة
       const now = Date.now();
@@ -3626,6 +3628,15 @@
     }
     // إنهاء الجلسة مباشرة + قفل الجهاز من الخلفية
     async function endSession(deviceId, nn) {
+      if (!(await requirePerm('sessions', 'add', 'ليس لديك صلاحية لإنهاء جلسة'))) return;
+      // منع إنهاء الجلسة بدون شيفت مفتوح
+      try {
+        const activeShift = await window.shiftsAPI.getActiveShift();
+        if (!activeShift || !activeShift.id) {
+          showToast('لا يمكن إنهاء الجلسة بدون شيفت مفتوح. يرجى فتح شيفت أولاً', 'error');
+          return;
+        }
+      } catch (e) { /* لو فشل الفحص نكمل والتحقق النهائي في الخلفية */ }
       const activeBeforeEnd = await window.sessionAPI.getActiveSession(deviceId);
       const bookingIdToComplete = activeBeforeEnd && activeBeforeEnd.booking_id ? String(activeBeforeEnd.booking_id) : null;
       const res = await window.sessionAPI.endSession(deviceId);
@@ -3662,6 +3673,7 @@
     }
     // بدء جلسة مجانية (دقيقة واحدة)
     async function startFreeSession(deviceId, nn) {
+      if (!(await requirePerm('sessions', 'add', 'ليس لديك صلاحية لفتح جلسة'))) return;
       try {
         const res = await window.sessionAPI.startFreeSession({ device_id: deviceId });
         if (res.success) {
@@ -3677,6 +3689,7 @@
     }
     // بدء جلسة مجانية مفتوحة
     async function startFreeOpenSession(deviceId, nn) {
+      if (!(await requirePerm('sessions', 'add', 'ليس لديك صلاحية لفتح جلسة'))) return;
       try {
         const res = await window.sessionAPI.startFreeOpenSession({ device_id: deviceId });
         if (res.success) {
@@ -3694,6 +3707,137 @@
     function roundToNearestFive(amount) {
       const val = Number(amount) || 0;
       return Math.round(val / 5) * 5;
+    }
+    // ============ تفصيل فترات الجلسة (قبل وبعد كل تعديل) ============
+    // نهاية المحاسبة الفعلية: نفس منطق الخلفية (مدة/وقت انتهاء/حجز)
+    function getSessionBilledEndMs(session, extraSecondsTotal = 0) {
+      const startMs = Number(session.start_time) || 0;
+      const actualEnd = session.end_time ? Number(session.end_time) : Date.now();
+      const isActive = !session.end_time;
+      if (session.type === 'timed') {
+        let allowed = null;
+        if (session.booked_duration) {
+          allowed = startMs + Number(session.booked_duration) * 1000;
+          // في المحاسبة النهائية الجلسة المحجوزة بتتحسب بمدة الحجز كاملة
+          if (!isActive) return Math.max(startMs, allowed);
+        } else if (session.scheduled_end_time) {
+          allowed = Number(session.scheduled_end_time);
+        } else if (session.duration) {
+          allowed = startMs + (Number(session.duration) + (Number(extraSecondsTotal) || 0)) * 1000;
+        }
+        if (allowed != null) return Math.max(startMs, Math.min(actualEnd, allowed));
+      }
+      return Math.max(startMs, actualEnd);
+    }
+
+    // يبني جدول الفترات: كل تغيير نوع/نمط/تمديد بيبدأ فترة جديدة بوقتها وسعرها
+    async function buildSessionBreakdown(session, device) {
+      const empty = { html: '', total: 0 };
+      if (!session || !device || !session.start_time) return empty;
+      const startMs = Number(session.start_time);
+      const mods = (await window.sessionAPI.getSessionModifications(session.id)) || [];
+      // مدة التمديدات المسجلة كـ extra_time (تُضاف للمدة في الحساب النهائي)
+      const legacyExtraSeconds = mods
+        .filter(m => m.type === 'extra_time')
+        .reduce((sum, m) => sum + (parseInt(m.value) || 0), 0);
+      const endMs = getSessionBilledEndMs(session, legacyExtraSeconds);
+      if (!(endMs > startMs)) return empty;
+      const byTime = (a, b) => (Number(a.created_at) || 0) - (Number(b.created_at) || 0);
+      const events = mods
+        .filter(m => ['change_type', 'change_mode', 'extra_time', 'extra_time_simple'].includes(m.type))
+        .sort(byTime);
+
+      // النوع والنمط في بداية الجلسة (من أول تعديل، وإلا من بيانات الجلسة)
+      let currentType = session.type || 'timed';
+      const firstTypeMod = events.find(m => m.type === 'change_type');
+      if (firstTypeMod) {
+        const fromVal = (String(firstTypeMod.value || '').split('->')[0] || '').trim().toLowerCase();
+        if (fromVal === 'timed' || fromVal === 'open') currentType = fromVal;
+      }
+      let currentMode = session.mode || 'single';
+      const firstModeMod = events.find(m => m.type === 'change_mode');
+      if (firstModeMod) {
+        const fromVal = (String(firstModeMod.value || '').split('->')[0] || '').trim().toLowerCase();
+        if (fromVal === 'single' || fromVal === 'double') currentMode = fromVal;
+      }
+
+      const segments = [];
+      let segStart = startMs;
+      let note = 'بداية الجلسة';
+      for (const m of events) {
+        const at = Number(m.created_at || 0);
+        if (!at || at <= segStart || at >= endMs) continue;
+        segments.push({ from: segStart, to: at, type: currentType, mode: currentMode, note });
+        const parts = String(m.value || '').split('->');
+        if (m.type === 'change_type') {
+          const toVal = (parts[1] || '').trim().toLowerCase();
+          if (toVal === 'timed' || toVal === 'open') currentType = toVal;
+          note = toVal === 'timed' ? 'تحويل إلى مؤقتة' : 'تحويل إلى مفتوحة';
+        } else if (m.type === 'change_mode') {
+          const toVal = (parts[1] || '').trim().toLowerCase();
+          if (toVal === 'single' || toVal === 'double') currentMode = toVal;
+          note = toVal === 'double' ? 'تحويل إلى زوجي' : 'تحويل إلى فردي';
+        } else {
+          const mins = Math.ceil((parseInt(m.value) || 0) / 60);
+          note = `تمديد +${mins} دقيقة`;
+        }
+        segStart = at;
+      }
+      segments.push({ from: segStart, to: endMs, type: currentType, mode: currentMode, note });
+
+      const priceSingle = Number(device.price_single);
+      const priceDouble = Number(device.price_double);
+      const priceFallback = Number(device.price);
+      const rateFor = (mode) => {
+        if (mode === 'double') {
+          if (!isNaN(priceDouble) && priceDouble > 0) return priceDouble;
+          if (!isNaN(priceFallback) && priceFallback > 0) return priceFallback;
+          return 0;
+        }
+        if (!isNaN(priceSingle) && priceSingle > 0) return priceSingle;
+        if (!isNaN(priceFallback) && priceFallback > 0) return priceFallback;
+        return 0;
+      };
+
+      let total = 0;
+      const rowsHtml = segments.map(seg => {
+        const sec = Math.max(0, Math.floor((seg.to - seg.from) / 1000));
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const cost = +(Math.ceil(sec / 60) * (rateFor(seg.mode) / 60)).toFixed(2);
+        total += cost;
+        const typeStr = seg.type === 'timed' ? 'مؤقتة' : 'مفتوحة';
+        const modeStr = seg.mode === 'double' ? 'زوجي' : 'فردي';
+        const fromTime = new Date(seg.from).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+        const toTime = new Date(seg.to).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+        return `<tr>` +
+          `<td style='padding:4px;white-space:nowrap;'>${fromTime}</td>` +
+          `<td style='padding:4px;white-space:nowrap;'>${toTime}</td>` +
+          `<td style='padding:4px;'>${h} ساعة ${m} دقيقة</td>` +
+          `<td style='padding:4px;'>${typeStr}</td>` +
+          `<td style='padding:4px;'>${modeStr}</td>` +
+          `<td style='padding:4px;color:#666;font-size:0.92em;'>${seg.note || ''}</td>` +
+          `<td style='padding:4px;'>${cost.toFixed(2)} جنيه</td>` +
+          `</tr>`;
+      }).join('');
+
+      const html = `<div style='margin:10px 0 5px 0;'><b>تفصيل الفترات (قبل وبعد كل تعديل):</b></div>` +
+        `<div style='overflow-x:auto;'>` +
+        `<table style='width:100%;background:#f9f9f9;border-collapse:collapse;font-size:0.95em;'>` +
+        `<tr><th style='text-align:right;padding:4px;'>من</th>` +
+        `<th style='text-align:right;padding:4px;'>إلى</th>` +
+        `<th style='text-align:right;padding:4px;'>المدة</th>` +
+        `<th style='text-align:right;padding:4px;'>النوع</th>` +
+        `<th style='text-align:right;padding:4px;'>النمط</th>` +
+        `<th style='text-align:right;padding:4px;'>التعديل</th>` +
+        `<th style='text-align:right;padding:4px;'>التكلفة</th></tr>` +
+        rowsHtml +
+        `<tr>` +
+        `<td colspan='6' style='text-align:right;padding:4px;'><b>إجمالي سعر الجلسة</b></td>` +
+        `<td style='padding:4px;'><b>${roundToNearestFive(total).toFixed(2)} جنيه</b></td>` +
+        `</tr></table></div>`;
+
+      return { html, total, segments };
     }
     // تعديل دالة ملخص الجلسة لعرض المنتجات
     let currentSummarySessionId = null;
@@ -3779,110 +3923,11 @@
       let productsHtml = '';
       let productsTotal = 0;
       let modeStr = session ? (session.mode === 'double' ? 'زوجي' : 'فردي') : '-';
-      // جدول تفصيلي للفترات حسب تغييرات النمط
+      // جدول تفصيلي للفترات (قبل وبعد كل تعديل: نوع/نمط/تمديد)
       let segmentsHtml = '';
-      if (session && device && session.start_time && session.end_time) {
-        const startMs = Number(session.start_time);
-        const endMs = Number(session.end_time);
-        if (endMs > startMs) {
-          const mods = await window.sessionAPI.getSessionModifications(session.id);
-          const modeMods = (mods || []).filter(m => m.type === 'change_mode').sort((a, b) => (Number(a.created_at) || 0) - (Number(b.created_at) || 0));
-          const segments = [];
-          let currentStart = startMs;
-          let initialMode = (session.mode || 'single');
-          if (modeMods.length > 0) {
-            const firstParts = String(modeMods[0].value || '').split('->');
-            const fromVal = (firstParts[0] || '').trim().toLowerCase();
-            if (fromVal === 'single' || fromVal === 'double') initialMode = fromVal;
-          }
-          let currentMode = initialMode;
-          for (const m of modeMods) {
-            const changeAt = Number(m.created_at || 0);
-            if (changeAt && changeAt > currentStart && changeAt < endMs) {
-              segments.push({ from: currentStart, to: changeAt, mode: currentMode });
-              const parts = String(m.value || '').split('->');
-              const toVal = (parts[1] || '').trim().toLowerCase();
-              if (toVal === 'single' || toVal === 'double') currentMode = toVal;
-              currentStart = changeAt;
-            }
-          }
-          if (endMs > currentStart) segments.push({ from: currentStart, to: endMs, mode: currentMode });
-          if (segments.length === 0) segments.push({ from: startMs, to: endMs, mode: currentMode });
-          const priceSingle = Number(device.price_single);
-          const priceDouble = Number(device.price_double);
-          const priceFallback = Number(device.price);
-          function getPricePerHourByMode(mode) {
-            if (mode === 'double') {
-              if (!isNaN(priceDouble) && priceDouble > 0) return priceDouble;
-              if (!isNaN(priceFallback) && priceFallback > 0) return priceFallback;
-              return 0;
-            } else {
-              if (!isNaN(priceSingle) && priceSingle > 0) return priceSingle;
-              if (!isNaN(priceFallback) && priceFallback > 0) return priceFallback;
-              return 0;
-            }
-          }
-          let computedBaseTotal = 0;
-          segmentsHtml = `<div style='margin:10px 0 5px 0;'><b>تفصيل الفترات حسب النمط:</b></div>` +
-            `<table style='width:100%;background:#f9f9f9;border-collapse:collapse;'>` +
-            `<tr><th style='text-align:right;padding:4px;'>من</th><th style='text-align:right;padding:4px;'>إلى</th><th style='text-align:right;padding:4px;'>المدة</th><th style='text-align:right;padding:4px;'>النمط</th><th style='text-align:right;padding:4px;'>التكلفة</th></tr>`;
-          for (const seg of segments) {
-            const segSec = Math.max(0, Math.floor((seg.to - seg.from) / 1000));
-            const h = Math.floor(segSec / 3600);
-            const m = Math.floor((segSec % 3600) / 60);
-            const ph = getPricePerHourByMode(seg.mode);
-            const pm = ph / 60;
-            const minsBill = Math.ceil(segSec / 60);
-            const cost = +(minsBill * pm).toFixed(2);
-            computedBaseTotal += cost;
-            const fromStr = new Date(seg.from).toLocaleString('ar-EG');
-            const toStr = new Date(seg.to).toLocaleString('ar-EG');
-            const modeStrSeg = seg.mode === 'double' ? 'زوجي' : 'فردي';
-            segmentsHtml += `<tr>` +
-              `<td style='padding:4px;'>${fromStr}</td>` +
-              `<td style='padding:4px;'>${toStr}</td>` +
-              `<td style='padding:4px;'>${h} ساعة ${m} دقيقة</td>` +
-              `<td style='padding:4px;'>${modeStrSeg}</td>` +
-              `<td style='padding:4px;'>${cost.toFixed(2)} جنيه</td>` +
-              `</tr>`;
-          }
-          segmentsHtml += `<tr>` +
-            `<td colspan='4' style='text-align:right;padding:4px;'><b>إجمالي سعر الجلسة</b></td>` +
-            `<td style='padding:4px;'><b>${roundToNearestFive(computedBaseTotal).toFixed(2)} جنيه</b></td>` +
-            `</tr></table>`;
-        }
-      }
-      // جلب التعديلات (modifications)
-      let modificationsHtml = '';
-      if (sessionId) {
-        const mods = await window.sessionAPI.getSessionModifications(sessionId);
-        const extraMods = mods.filter(m => m.type === 'extra_time');
-        const typeMods = mods.filter(m => m.type === 'change_type');
-        const modeMods = mods.filter(m => m.type === 'change_mode');
-        if (extraMods.length > 0) {
-          modificationsHtml += `<div style='margin:10px 0 5px 0;'><b>التمديدات:</b></div><ul style='margin:0 0 8px 0;padding:0 18px;text-align:right;'>`;
-          for (const m of extraMods) {
-            const min = Math.ceil(parseInt(m.value) / 60);
-            const date = m.created_at ? new Date(m.created_at).toLocaleString('ar-EG') : '';
-            const extraText = session.scheduled_end_time ? 'تمديد وقت الانتهاء' : 'تمديد المدة';
-            modificationsHtml += `<li>${extraText} ${min} دقيقة${date ? ' (' + date + ')' : ''}</li>`;
-          }
-          modificationsHtml += '</ul>';
-        }
-        if (typeMods.length > 0 || modeMods.length > 0) {
-          modificationsHtml += `<div style='margin:10px 0 5px 0;'><b>تغييرات الجلسة:</b></div><ul style='margin:0 0 8px 0;padding:0 18px;text-align:right;'>`;
-          for (const m of typeMods) {
-            let fromTo = m.value.split('->');
-            let txt = `تغيير نوع الجلسة من <b>${fromTo[0] === 'timed' ? 'مؤقتة' : 'مفتوحة'}</b> إلى <b>${fromTo[1] === 'timed' ? 'مؤقتة' : 'مفتوحة'}</b>`;
-            modificationsHtml += `<li>${txt}</li>`;
-          }
-          for (const m of modeMods) {
-            let fromTo = m.value.split('->');
-            let txt = `تغيير النمط من <b>${fromTo[0] === 'double' ? 'زوجي' : 'فردي'}</b> إلى <b>${fromTo[1] === 'double' ? 'زوجي' : 'فردي'}</b>`;
-            modificationsHtml += `<li>${txt}</li>`;
-          }
-          modificationsHtml += '</ul>';
-        }
+      if (session && device) {
+        const breakdown = await buildSessionBreakdown(session, device);
+        segmentsHtml = breakdown.html;
       }
       // المنتجات
       if (sessionId) {
@@ -3944,7 +3989,6 @@
           <span style='font-weight:bold;color:#495057;'>⏰ وقت الانتهاء المحدد:</span> <b>${new Date(session.scheduled_end_time).toLocaleString('ar-EG')}</b>
         </div>` : ''}
         ${segmentsHtml}
-        ${modificationsHtml}
         <div style='margin-bottom:6px;font-size:1.1em;'>سعر الجلسة: <b>${sessionTotal.toFixed(2)} جنيه</b></div>
         ${productsHtml}
         <div style='margin-bottom:6px;'>إجمالي المنتجات والجلسات: <b>${totalAll.toFixed(2)} جنيه</b></div>
@@ -4459,98 +4503,13 @@
         if (session) sessionId = session.id;
       }
       currentSummarySessionId = sessionId || null;
-      // تجهيز جدول الفترات بحسب تغييرات النمط
+      // جدول الفترات (قبل وبعد كل تعديل) + قائمة التمديدات
       let segmentsHtml = '';
-      // تجهيز قائمة تمديدات الوقت
-      let extrasHtml = '';
-      if (sessionId && session) {
-        const startMs = Number(session.start_time);
-        const endMs = Number(session.end_time || end || 0);
-        if (endMs && endMs > startMs) {
-          const mods = await window.sessionAPI.getSessionModifications(sessionId);
-          const modeMods = (mods || []).filter(m => m.type === 'change_mode').sort((a, b) => (Number(a.created_at) || 0) - (Number(b.created_at) || 0));
-          const extraMods = (mods || []).filter(m => m.type === 'extra_time');
-          const segments = [];
-          let currentStart = startMs;
-          // النمط الابتدائي من أول تعديل (from) إن وُجد وإلا من session.mode
-          let initialMode = (session.mode || 'single');
-          if (modeMods.length > 0) {
-            const firstParts = String(modeMods[0].value || '').split('->');
-            const fromVal = (firstParts[0] || '').trim().toLowerCase();
-            if (fromVal === 'single' || fromVal === 'double') initialMode = fromVal;
-          }
-          let currentMode = initialMode;
-          for (const m of modeMods) {
-            const changeAt = Number(m.created_at || 0);
-            if (changeAt && changeAt > currentStart && changeAt < endMs) {
-              segments.push({ from: currentStart, to: changeAt, mode: currentMode });
-              const parts = String(m.value || '').split('->');
-              const toVal = (parts[1] || '').trim().toLowerCase();
-              if (toVal === 'single' || toVal === 'double') currentMode = toVal;
-              currentStart = changeAt;
-            }
-          }
-          if (endMs > currentStart) segments.push({ from: currentStart, to: endMs, mode: currentMode });
-          if (segments.length === 0) segments.push({ from: startMs, to: endMs, mode: currentMode });
-          // أسعار
-          const devs = await window.deviceAPI.getDevices();
-          const device = devs.find(d => d.id === session.device_id);
-          const priceSingle = device ? Number(device.price_single) : NaN;
-          const priceDouble = device ? Number(device.price_double) : NaN;
-          const priceFallback = device ? Number(device.price) : NaN;
-          function getPricePerHourByMode(mode) {
-            if (mode === 'double') {
-              if (!isNaN(priceDouble) && priceDouble > 0) return priceDouble;
-              if (!isNaN(priceFallback) && priceFallback > 0) return priceFallback;
-              return 0;
-            } else {
-              if (!isNaN(priceSingle) && priceSingle > 0) return priceSingle;
-              if (!isNaN(priceFallback) && priceFallback > 0) return priceFallback;
-              return 0;
-            }
-          }
-          let computedBaseTotal = 0;
-          segmentsHtml = `<div style='margin:10px 0 5px 0;'><b>تفصيل الفترات حسب النمط:</b></div>` +
-            `<table style='width:100%;background:#f9f9f9;border-collapse:collapse;'>` +
-            `<tr><th style='text-align:right;padding:4px;'>من</th><th style='text-align:right;padding:4px;'>إلى</th><th style='text-align:right;padding:4px;'>المدة</th><th style='text-align:right;padding:4px;'>النمط</th><th style='text-align:right;padding:4px;'>التكلفة</th></tr>`;
-          for (const seg of segments) {
-            const segSec = Math.max(0, Math.floor((seg.to - seg.from) / 1000));
-            const h = Math.floor(segSec / 3600);
-            const m = Math.floor((segSec % 3600) / 60);
-            const ph = getPricePerHourByMode(seg.mode);
-            const pm = ph / 60;
-            const minsBill = Math.ceil(segSec / 60);
-            const cost = +(minsBill * pm).toFixed(2);
-            computedBaseTotal += cost;
-            const fromStr = new Date(seg.from).toLocaleString('ar-EG');
-            const toStr = new Date(seg.to).toLocaleString('ar-EG');
-            const modeStrSeg = seg.mode === 'double' ? 'زوجي' : 'فردي';
-            segmentsHtml += `<tr>` +
-              `<td style='padding:4px;'>${fromStr}</td>` +
-              `<td style='padding:4px;'>${toStr}</td>` +
-              `<td style='padding:4px;'>${h} ساعة ${m} دقيقة</td>` +
-              `<td style='padding:4px;'>${modeStrSeg}</td>` +
-              `<td style='padding:4px;'>${cost.toFixed(2)} جنيه</td>` +
-              `</tr>`;
-          }
-          segmentsHtml += `<tr>` +
-            `<td colspan='4' style='text-align:right;padding:4px;'><b>إجمالي سعر الجلسة</b></td>` +
-            `<td style='padding:4px;'><b>${roundToNearestFive(computedBaseTotal).toFixed(2)} جنيه</b></td>` +
-            `</tr></table>`;
-
-          // بناء قائمة التمديدات إن وُجدت
-          if (extraMods.length > 0) {
-            extrasHtml += `<div style='margin:10px 0 5px 0;'><b>التمديدات:</b></div>`;
-            extrasHtml += `<ul style='margin:0 0 8px 0;padding:0 18px;text-align:right;'>`;
-            for (const m of extraMods) {
-              const min = Math.ceil(parseInt(m.value) / 60);
-              const date = m.created_at ? new Date(m.created_at).toLocaleString('ar-EG') : '';
-              const extraText = 'تمديد وقت الجلسة';
-              extrasHtml += `<li>${extraText} ${min} دقيقة${date ? ' (' + date + ')' : ''}</li>`;
-            }
-            extrasHtml += `</ul>`;
-          }
-        }
+      if (session) {
+        const devsForSegments = await window.deviceAPI.getDevices();
+        const deviceForSegments = devsForSegments.find(d => d.id === session.device_id);
+        const breakdown = await buildSessionBreakdown(session, deviceForSegments);
+        segmentsHtml = breakdown.html;
       }
       let productsHtml = '';
       let productsTotal = 0;
@@ -4620,7 +4579,6 @@
         <div style='margin-bottom:6px;'>المدة: <b>${hours} ساعة ${minutes} دقيقة</b></div>
         ${scheduledHtml}
         ${segmentsHtml}
-        ${extrasHtml}
         ${productsHtml}
         <hr style='margin:8px 0;'>
         <div style='margin-bottom:6px;font-size:1.2em;'>الإجمالي الكلي: <b>${totalWithProductsRounded.toFixed(2)} جنيه</b></div>
@@ -6405,6 +6363,7 @@
       if (e) e.preventDefault();
       const errEl = document.getElementById('client-error');
       const clientId = document.getElementById('client-id').value;
+      if (!(await requirePerm('clients', clientId ? 'edit' : 'add', 'ليس لديك صلاحية لهذا الإجراء على العملاء'))) return;
       const name = document.getElementById('client-name').value.trim();
       const phone = document.getElementById('client-phone').value.trim();
       const email = document.getElementById('client-email').value.trim();
@@ -6456,6 +6415,7 @@
     }
 
     async function deleteClient(id) {
+      if (!(await requirePerm('clients', 'delete', 'ليس لديك صلاحية لحذف العميل'))) return;
       const confirmed = await showConfirmModal('تأكيد حذف العميل؟');
       if (!confirmed) return;
       const res = await window.clientsAPI.delete(id);
@@ -6465,6 +6425,7 @@
     }
 
     async function editClient(id) {
+      if (!(await requirePerm('clients', 'edit', 'ليس لديك صلاحية لتعديل العميل'))) return;
       const res = await window.clientsAPI.getAll();
       const clients = (res && res.success) ? res.data : [];
       const c = clients.find(x => x.id === id);
@@ -6925,6 +6886,7 @@
     }
 
     async function recordKidsAreaSaleToShift(unitPrice) {
+      if (!(await requirePerm('kids-area', 'add', 'ليس لديك صلاحية لتسجيل بيع في منطقة الأطفال'))) return;
       const price = Number(unitPrice) || 0;
       if (window.electronAPI && typeof window.electronAPI.recordKidsAreaSale === 'function') {
         const r = await window.electronAPI.recordKidsAreaSale({ unitPrice: price });
@@ -7659,6 +7621,7 @@
       if (e) e.preventDefault();
       const errEl = document.getElementById('booking-error');
       const bookingId = document.getElementById('booking-id').value;
+      if (!(await requirePerm('bookings', bookingId ? 'edit' : 'add', 'ليس لديك صلاحية لهذا الإجراء على الحجوزات'))) return;
       const clientId = document.getElementById('booking-client-id-val').value || '';
       const clientName = document.getElementById('booking-client-id').value.trim();
       const deviceId = document.getElementById('booking-device-id').value;
@@ -7805,6 +7768,7 @@
     }
 
     async function deleteBooking(id) {
+      if (!(await requirePerm('bookings', 'delete', 'ليس لديك صلاحية لحذف الحجز'))) return;
       const confirmed = await showConfirmModal('تأكيد حذف الحجز؟');
       if (!confirmed) return;
       const res = await window.bookingsAPI.delete(id);
@@ -8448,6 +8412,11 @@
     window.closeEditStandaloneSaleModal = closeEditStandaloneSaleModal;
     // إدارة المستخدمين
     async function renderUsersTable() {
+      if (!currentUser || currentUser.role !== 'admin') {
+        const container = document.getElementById('users-table');
+        if (container) container.innerHTML = '<p style="color:#c00;text-align:center;">ليس لديك صلاحية لعرض المستخدمين</p>';
+        return;
+      }
       const users = await window.usersAPI.getUsers();
       const container = document.getElementById('users-table');
       if (!users || users.length === 0) {
@@ -8685,6 +8654,7 @@
     }
 
     async function processPayout(userId, dailyWage, bonusAmount, totalAmount) {
+      if (!(await requirePerm('employees', 'add', 'ليس لديك صلاحية لصرف اليومية'))) return;
       if (!confirm('تأكيد صرف اليومية؟')) return;
       const today = new Date();
       const dateStr = today.getFullYear() + '-' + String(today.getMonth()+1).padStart(2,'0') + '-' + String(today.getDate()).padStart(2,'0');
@@ -8715,6 +8685,7 @@
     }
 
     async function saveTargets() {
+      if (!(await requirePerm('employees', 'edit', 'ليس لديك صلاحية لتعديل أهداف الموظفين'))) return;
       const userId = document.getElementById('target-user-id').value;
       const wage = parseFloat(document.getElementById('target-wage').value) || 0;
       const daily = parseFloat(document.getElementById('target-daily').value) || 0;
@@ -8826,6 +8797,7 @@
 
       document.getElementById('offer-form').addEventListener('submit', async (e) => {
         e.preventDefault();
+        if (!(await requirePerm('offers', isEdit ? 'edit' : 'add', 'ليس لديك صلاحية لهذا الإجراء على العروض'))) return;
         const name = document.getElementById('offer-name').value.trim();
         const description = document.getElementById('offer-desc').value.trim();
         const type = document.getElementById('offer-type').value;
@@ -8862,6 +8834,11 @@
     }
     // إظهار/إخفاء صلاحيات الصفحات حسب الدور
     async function togglePermissionsFields() {
+      if (!currentUser || currentUser.role !== 'admin') {
+        const pf = document.getElementById('permissions-fields');
+        if (pf) pf.style.display = 'none';
+        return;
+      }
       const role = document.getElementById('user-role').value;
       const permissionsFields = document.getElementById('permissions-fields');
       const permissionsContainer = document.getElementById('permissions-container');
@@ -8906,6 +8883,10 @@
     }
     // عند فتح نافذة إضافة مستخدم
     async function openAddUserModal() {
+      if (!currentUser || currentUser.role !== 'admin') {
+        showToast('ليس لديك صلاحية لإدارة المستخدمين', 'error');
+        return;
+      }
       document.getElementById('user-modal-title').textContent = 'إضافة مستخدم';
       document.getElementById('user-id').value = '';
       document.getElementById('user-username').value = '';
@@ -8919,6 +8900,10 @@
 
     // عند فتح نافذة تعديل مستخدم
     async function openEditUserModal(id, username, role) {
+      if (!currentUser || currentUser.role !== 'admin') {
+        showToast('ليس لديك صلاحية لإدارة المستخدمين', 'error');
+        return;
+      }
       document.getElementById('user-modal-title').textContent = 'تعديل مستخدم';
       document.getElementById('user-id').value = id;
       document.getElementById('user-username').value = username;
@@ -9039,6 +9024,14 @@
     }
     // حذف مستخدم
     async function deleteUserConfirm(id) {
+      if (!currentUser || currentUser.role !== 'admin') {
+        showToast('ليس لديك صلاحية لإدارة المستخدمين', 'error');
+        return;
+      }
+      if (currentUser && Number(id) === Number(currentUser.id)) {
+        showToast('لا يمكنك حذف حسابك الحالي', 'error');
+        return;
+      }
       const confirmed = await showConfirmModal('هل أنت متأكد من حذف هذا المستخدم؟');
       if (!confirmed) return;
       const res = await window.usersAPI.deleteUser(id);
@@ -9077,13 +9070,26 @@
       }
     }
 
+    // فحص صلاحية مع رسالة واضحة
+    async function requirePerm(page, action, message) {
+      const ok = await checkPermission(page, action);
+      if (!ok) showToast(message || 'ليس لديك صلاحية لتنفيذ هذا الإجراء', 'error');
+      return ok;
+    }
+
     // دالة لإخفاء/إظهار عناصر الواجهة حسب الصلاحيات
     async function applyPermissions() {
       const navButtons = document.querySelectorAll('.nav-btns button');
       const pages = await window.usersAPI.getAllPages();
 
+      const isAdmin = !!(currentUser && currentUser.role === 'admin');
       for (const button of navButtons) {
         const pageId = button.id.replace('nav-', '');
+        // صفحة المستخدمين للمدير فقط (ما تتأثرش بأي صلاحية صفحة)
+        if (pageId === 'users') {
+          button.style.display = isAdmin ? 'block' : 'none';
+          continue;
+        }
         const hasPermission = await checkPermission(pageId, 'view');
 
         if (!hasPermission) {
@@ -9091,6 +9097,11 @@
         } else {
           button.style.display = 'block';
         }
+      }
+      // إخفاء صفحة المستخدمين نفسها لغير المدير
+      if (!isAdmin) {
+        const pageUsers = document.getElementById('page-users');
+        if (pageUsers) pageUsers.classList.add('hidden');
       }
     }
 
@@ -9231,13 +9242,6 @@
     }
     // عند بدء التشغيل، أخفِ صفحة المستخدمين حتى تسجيل الدخول
     window.addEventListener('DOMContentLoaded', async function () {
-      // إصلاح صلاحيات المستخدمين الحاليين
-      try {
-        await window.usersAPI.fixUserPermissions();
-      } catch (error) {
-        console.error('Error fixing user permissions:', error);
-      }
-
       document.getElementById('login-modal').style.display = 'flex';
 
       // تعبئة قائمة المستخدمين في نافذة تسجيل الدخول
@@ -9283,7 +9287,8 @@
     });
     // زر تسجيل الخروج
     if (document.getElementById('logout-btn')) {
-      document.getElementById('logout-btn').onclick = function () {
+      document.getElementById('logout-btn').onclick = async function () {
+        try { await window.usersAPI.logout(); } catch (e) { }
         window.location.reload();
       };
     }
@@ -9564,11 +9569,7 @@
     }
     
     async function deleteSelectedSessions() {
-      // التحقق من صلاحيات المستخدم
-      if (!currentUser || currentUser.role !== 'admin') {
-        showToast('ليس لديك صلاحية لحذف الجلسات', 'error');
-        return;
-      }
+      if (!(await requirePerm('sessions', 'delete', 'ليس لديك صلاحية لحذف الجلسات'))) return;
       
       const checkboxes = document.querySelectorAll('.session-checkbox:checked');
       if (checkboxes.length === 0) {
@@ -10060,6 +10061,7 @@
       doc.save('المبيعات_المنفصلة.pdf');
     }
     async function backupDatabase() {
+      if (!(await requirePerm('backup', 'add', 'ليس لديك صلاحية للنسخ الاحتياطي'))) return;
       const res = await window.backupAPI.backupDatabase();
       if (res && res.success) {
         showToast('تم حفظ النسخة الاحتياطية بنجاح.', 'success');
@@ -10068,6 +10070,7 @@
       }
     }
     async function restoreDatabase() {
+      if (!(await requirePerm('backup', 'edit', 'ليس لديك صلاحية لاستعادة النسخة الاحتياطية'))) return;
       const res = await window.backupAPI.restoreDatabase();
       if (res && res.success) {
         showToast('تمت الاستعادة بنجاح. سيتم إعادة تشغيل البرنامج.', 'success');
@@ -10092,6 +10095,7 @@
     // عند حفظ التعديلات، احفظ القيمتين
     if (document.getElementById('edit-device-form')) {
       document.getElementById('edit-device-form').onsubmit = async function (e) {
+        if (!(await requirePerm('devices', 'edit', 'ليس لديك صلاحية لتعديل الجهاز'))) return;
         e.preventDefault();
         const id = document.getElementById('edit-device-id').value;
         const name = document.getElementById('edit-device-name').value.trim();
@@ -10138,6 +10142,7 @@
     // 4. عند تأكيد النقل
     if (document.getElementById('confirm-transfer-btn')) {
       document.getElementById('confirm-transfer-btn').onclick = async function () {
+        if (!(await requirePerm('sessions', 'add', 'ليس لديك صلاحية لنقل الجلسة'))) return;
         const newDeviceId = document.getElementById('transfer-device-select').value;
         if (!newDeviceId) {
           document.getElementById('transfer-error').textContent = 'يرجى اختيار جهاز جديد.';
@@ -10235,6 +10240,7 @@
     if (document.getElementById('edit-session-form')) {
       document.getElementById('edit-session-form').onsubmit = async function (e) {
         e.preventDefault();
+        if (!(await requirePerm('sessions', 'add', 'ليس لديك صلاحية لتعديل الجلسة'))) return;
         const hours = parseInt(document.getElementById('edit-extra-hours').value) || 0;
         const minutes = parseInt(document.getElementById('edit-extra-minutes').value) || 0;
         const extraSeconds = (hours * 3600) + (minutes * 60);
@@ -10292,6 +10298,7 @@
       };
     }
     async function deleteDeviceConfirm(deviceId) {
+      if (!(await requirePerm('devices', 'delete', 'ليس لديك صلاحية لحذف الجهاز'))) return;
       const confirmed = await showConfirmModal('هل أنت متأكد أنك تريد حذف هذا الجهاز؟');
       if (confirmed) {
         window.deviceAPI.deleteDevice(deviceId).then(res => {
@@ -10306,11 +10313,7 @@
     }
     // دالة حذف الجلسة
     async function deleteSession(sessionId) {
-      // التحقق من صلاحيات المستخدم
-      if (!currentUser || currentUser.role !== 'admin') {
-        showToast('ليس لديك صلاحية لحذف الجلسات', 'error');
-        return;
-      }
+      if (!(await requirePerm('sessions', 'delete', 'ليس لديك صلاحية لحذف الجلسات'))) return;
 
       const confirmed = await showConfirmModal('هل أنت متأكد من حذف هذه الجلسة؟ هذا الإجراء لا يمكن التراجع عنه.');
       if (!confirmed) {
@@ -10336,11 +10339,7 @@
 
     // دالة تعديل الجلسة
     async function editSession(sessionId) {
-      // التحقق من صلاحيات المستخدم
-      if (!currentUser || currentUser.role !== 'admin') {
-        showToast('ليس لديك صلاحية لتعديل الجلسات', 'error');
-        return;
-      }
+      if (!(await requirePerm('sessions', 'edit', 'ليس لديك صلاحية لتعديل الجلسات'))) return;
 
       try {
         // جلب بيانات الجلسة
@@ -10857,6 +10856,7 @@
 
     // حفظ إعدادات المحل
     async function saveShopSettings() {
+      if (!(await requirePerm('settings', 'edit', 'ليس لديك صلاحية لتعديل الإعدادات'))) return;
       try {
         const shopName = document.getElementById('shop-name').value.trim();
         const logoFile = document.getElementById('shop-logo').files[0];
@@ -10994,6 +10994,7 @@
     window.removeTelegramChatById = removeTelegramChatById;
 
     async function saveTelegramSettings() {
+      if (!(await requirePerm('settings', 'edit', 'ليس لديك صلاحية لتعديل الإعدادات'))) return;
       try {
         const botToken = document.getElementById('telegram-bot-token').value.trim();
         const statusEl = document.getElementById('telegram-status');
@@ -11088,6 +11089,7 @@
       }
     }
     async function savePs4lockSettings() {
+      if (!(await requirePerm('settings', 'edit', 'ليس لديك صلاحية لتعديل الإعدادات'))) return;
       const token = document.getElementById('ps4lock-token').value.trim();
       const statusDiv = document.getElementById('ps4lock-status');
       try {
@@ -11402,6 +11404,7 @@
     }
     // حفظ الدورة الحالية في قاعدة البيانات
     async function saveCurrentTournamentToDB() {
+      if (!(await requirePerm('tournaments', currentTournamentId ? 'edit' : 'add', 'ليس لديك صلاحية لحفظ البطولة'))) return;
       if (!currentTournament) return;
       const data = JSON.stringify(currentTournament);
       let res;
@@ -11661,6 +11664,7 @@
         e.preventDefault();
 
         const id = document.getElementById('expense-id').value;
+        if (!(await requirePerm('expenses', id ? 'edit' : 'add', 'ليس لديك صلاحية لهذا الإجراء على المصروفات'))) return;
         const title = document.getElementById('expense-title').value.trim();
         const amount = parseFloat(document.getElementById('expense-amount').value);
         const frequency = document.getElementById('expense-frequency').value;
@@ -11729,6 +11733,7 @@
 
     // حذف مصروف
     async function deleteExpenseConfirm(expenseId) {
+      if (!(await requirePerm('expenses', 'delete', 'ليس لديك صلاحية لحذف المصروف'))) return;
       const confirmed = await showConfirmModal('هل أنت متأكد من حذف هذا المصروف؟');
       if (!confirmed) return;
 
@@ -12089,6 +12094,7 @@
         e.preventDefault();
 
         const id = document.getElementById('maintenance-id').value;
+        if (!(await requirePerm('maintenance', id ? 'edit' : 'add', 'ليس لديك صلاحية لهذا الإجراء على الصيانة'))) return;
         const title = document.getElementById('maintenance-title').value.trim();
         const deviceId = document.getElementById('maintenance-device').value;
         const reportedDate = new Date(document.getElementById('maintenance-reported-date').value).getTime();
@@ -12139,6 +12145,7 @@
 
     // حذف صيانة
     async function deleteMaintenanceConfirm(maintenanceId) {
+      if (!(await requirePerm('maintenance', 'delete', 'ليس لديك صلاحية لحذف الصيانة'))) return;
       const confirmed = await showConfirmModal('هل أنت متأكد من حذف هذا طلب الصيانة؟');
       if (!confirmed) return;
 
@@ -12403,103 +12410,16 @@
       }
       const hours = isNaN(durationSec) ? 0 : Math.floor(durationSec / 3600);
       const minutesShow = isNaN(durationSec) ? 0 : Math.floor((durationSec % 3600) / 60);
-      // حساب فترات النمط وبناء جدول تفصيلي
+      // جدول الفترات (قبل وبعد كل تعديل: نوع/نمط/تمديد)
       let segmentsHtml = '';
       let sessionBaseTotal = 0;
       if (device && session) {
-        // للجلسات المجانية، استخدم القيمة المحفوظة في قاعدة البيانات
         if (session.total === 0) {
-          sessionBaseTotal = 0;
           segmentsHtml = '<div style="text-align:center;color:#28a745;font-weight:bold;padding:10px;background:#f0f8f0;border-radius:5px;margin:10px 0;">🆓 جلسة مجانية - لا يوجد تكلفة</div>';
         } else {
-          // للجلسات المدفوعة، احسب السعر كالمعتاد
-          const startMs = Number(session.start_time);
-          let effectiveNowMs = Date.now();
-          const endByScheduleMs = session.scheduled_end_time ? Number(session.scheduled_end_time) : null;
-          const endByDurationMs = (session.type === 'timed' && session.duration) ? (startMs + Number(session.duration) * 1000) : null;
-          const candidates = [effectiveNowMs];
-          if (endByScheduleMs) candidates.push(endByScheduleMs);
-          if (endByDurationMs) candidates.push(endByDurationMs);
-          const effectiveEndMs = Math.min.apply(null, candidates);
-          // اجلب تغييرات النمط لبناء الفترات
-          const mods = await window.sessionAPI.getSessionModifications(session.id);
-          const modeMods = (mods || []).filter(m => m.type === 'change_mode').sort((a, b) => (Number(a.created_at) || 0) - (Number(b.created_at) || 0));
-          const segments = [];
-          let currentStart = startMs;
-          // حدد النمط الابتدائي من أول تعديل (from) إن وُجد، وإلا استخدم نمط الجلسة الحالي
-          let initialMode = (session.mode || 'single');
-          if (modeMods.length > 0) {
-            const firstParts = String(modeMods[0].value || '').split('->');
-            const fromVal = (firstParts[0] || '').trim().toLowerCase();
-            if (fromVal === 'single' || fromVal === 'double') {
-              initialMode = fromVal;
-            }
-          }
-          let currentMode = initialMode;
-          for (const m of modeMods) {
-            const changeAt = Number(m.created_at || 0);
-            if (changeAt && changeAt > currentStart && changeAt < effectiveEndMs) {
-              segments.push({ from: currentStart, to: changeAt, mode: currentMode });
-              // استخرج النمط الجديد من القيمة
-              const parts = String(m.value || '').split('->');
-              const toVal = (parts[1] || '').trim().toLowerCase();
-              if (toVal === 'single' || toVal === 'double') {
-                currentMode = toVal;
-              }
-              currentStart = changeAt;
-            }
-          }
-          // القطعة الأخيرة حتى نهاية الجلسة الفعّالة
-          if (effectiveEndMs > currentStart) {
-            segments.push({ from: currentStart, to: effectiveEndMs, mode: currentMode });
-          }
-          // fallback: إن لم توجد تعديلات، قطعة واحدة كاملة
-          if (segments.length === 0) {
-            segments.push({ from: startMs, to: effectiveEndMs, mode: currentMode });
-          }
-          // أسعار الساعة لكل نمط مع بديل عام
-          const priceSingle = Number(device.price_single);
-          const priceDouble = Number(device.price_double);
-          const priceFallback = Number(device.price);
-          function getPricePerHourByMode(mode) {
-            if (mode === 'double') {
-              if (!isNaN(priceDouble) && priceDouble > 0) return priceDouble;
-              if (!isNaN(priceFallback) && priceFallback > 0) return priceFallback;
-              return 0;
-            } else {
-              if (!isNaN(priceSingle) && priceSingle > 0) return priceSingle;
-              if (!isNaN(priceFallback) && priceFallback > 0) return priceFallback;
-              return 0;
-            }
-          }
-          // ابنِ جدول الفترات وحسب التكلفة
-          segmentsHtml = `<div style='margin:10px 0 5px 0;'><b>تفصيل الفترات حسب النمط:</b></div>` +
-            `<table style='width:100%;background:#f9f9f9;border-collapse:collapse;'>` +
-            `<tr><th style='text-align:right;padding:4px;'>من</th><th style='text-align:right;padding:4px;'>إلى</th><th style='text-align:right;padding:4px;'>المدة</th><th style='text-align:right;padding:4px;'>النمط</th><th style='text-align:right;padding:4px;'>التكلفة</th></tr>`;
-          for (const seg of segments) {
-            const segSec = Math.max(0, Math.floor((seg.to - seg.from) / 1000));
-            const h = Math.floor(segSec / 3600);
-            const m = Math.floor((segSec % 3600) / 60);
-            const ph = getPricePerHourByMode(seg.mode);
-            const pm = ph / 60;
-            const minsBill = Math.ceil(segSec / 60);
-            const cost = +(minsBill * pm).toFixed(2);
-            sessionBaseTotal += cost;
-            const fromStr = new Date(seg.from).toLocaleString('ar-EG');
-            const toStr = new Date(seg.to).toLocaleString('ar-EG');
-            const modeStrSeg = seg.mode === 'double' ? 'زوجي' : 'فردي';
-            segmentsHtml += `<tr>` +
-              `<td style='padding:4px;'>${fromStr}</td>` +
-              `<td style='padding:4px;'>${toStr}</td>` +
-              `<td style='padding:4px;'>${h} ساعة ${m} دقيقة</td>` +
-              `<td style='padding:4px;'>${modeStrSeg}</td>` +
-              `<td style='padding:4px;'>${cost.toFixed(2)} جنيه</td>` +
-              `</tr>`;
-          }
-          segmentsHtml += `<tr>` +
-            `<td colspan='4' style='text-align:right;padding:4px;'><b>إجمالي سعر الجلسة</b></td>` +
-            `<td style='padding:4px;'><b>${roundToNearestFive(sessionBaseTotal).toFixed(2)} جنيه</b></td>` +
-            `</tr></table>`;
+          const breakdown = await buildSessionBreakdown(session, device);
+          segmentsHtml = breakdown.html;
+          sessionBaseTotal = breakdown.total;
         }
       }
       let productsHtml = '';
@@ -14439,6 +14359,7 @@
 
     // حفظ إعدادات Hotspot
     async function saveHotspotSettings() {
+      if (!(await requirePerm('hotspot', 'edit', 'ليس لديك صلاحية لتعديل إعدادات الهوتسبوت'))) return;
       const ip = document.getElementById('hotspot-ip').value.trim();
       const username = document.getElementById('hotspot-username').value.trim();
       const password = document.getElementById('hotspot-password').value.trim();

@@ -183,7 +183,8 @@ contextBridge.exposeInMainWorld('usersAPI', {
   setUserPermissions: (userId, permissions) => ipcRenderer.invoke('set-user-permissions', { userId, permissions }),
   checkUserPermission: (userId, page, action) => ipcRenderer.invoke('check-user-permission', { userId, page, action }),
   getAllPages: () => ipcRenderer.invoke('get-all-pages'),
-  fixUserPermissions: () => ipcRenderer.invoke('fix-user-permissions')
+  fixUserPermissions: () => ipcRenderer.invoke('fix-user-permissions'),
+  logout: () => ipcRenderer.invoke('auth-logout')
 });
 
 contextBridge.exposeInMainWorld('backupAPI', {

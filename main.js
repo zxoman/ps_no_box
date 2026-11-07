@@ -606,7 +606,7 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS session_modifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER,
-    type TEXT, -- extra_time/change_type/change_mode
+    type TEXT, -- extra_time / extra_time_simple / change_type / change_mode
     value TEXT, -- تفاصيل التعديل (مثلاً: دقائق مضافة)
     price REAL, -- سعر التعديل (يُحسب لاحقاً)
     created_at INTEGER,
@@ -838,6 +838,13 @@ db.serialize(() => {
   setTimeout(() => {
     initializeShiftsTable();
   }, 1000); // تأخير قصير للتأكد من اكتمال إنشاء الجداول الأخرى
+
+  // إصلاح/استكمال صلاحيات المستخدمين عند بدء التشغيل (في الخلفية مش من الواجهة)
+  setTimeout(() => {
+    fixUserPermissions((err) => {
+      if (err) console.error('خطأ في إصلاح صلاحيات المستخدمين:', err.message);
+    });
+  }, 1500);
 });
 
 // دوال الفترة التجريبية في قاعدة البيانات
@@ -1187,6 +1194,58 @@ async function ps4lockApplyVerified(deviceId, command) {
     reply: res.reply,
     error: `تم إرسال الأمر لكن تأكدنا من الحالة فوجدناها "${stateLabel}" بدلاً من "${expected ? 'مقفول' : 'مفتوح'}"`
   };
+}
+
+
+// الشيفت النشط (أو null) — الجلسات ممنوعة من غير شيفت مفتوح
+function getActiveShiftRow() {
+  return new Promise(resolve => {
+    db.get('SELECT * FROM shifts WHERE status = ?', ['active'], (err, row) => resolve(err ? null : row));
+  });
+}
+
+// منع فتح/قفل أي جلسة بدون شيفت مفتوح
+const NO_SHIFT_MSG = 'لا يمكن فتح أو إنهاء الجلسة بدون شيفت مفتوح. يرجى فتح شيفت أولاً';
+
+// ===================== صلاحيات المستخدم الحالي =====================
+// المستخدم بيتحدد من تسجيل الدخول في العملية الرئيسية — الواجهة ما تقدرش تزوّرها
+let authUser = null;
+
+function setAuthUser(user) {
+  authUser = user ? { id: user.id, username: user.username, role: user.role } : null;
+}
+
+function isAdminUser() {
+  return !!(authUser && authUser.role === 'admin');
+}
+
+// يتحقق من صلاحية (صفحة + إجراء) للمستخدم المسجل
+function userHasPermission(page, action) {
+  return new Promise(resolve => {
+    if (!authUser) return resolve(false);
+    if (authUser.role === 'admin') return resolve(true);
+    checkUserPermission(authUser.id, page, action || 'view', (err, ok) => resolve(!err && !!ok));
+  });
+}
+
+// بيرجع كائن خطأ لو العملية ممنوعة، أو null لو مسموح
+async function denyUnless(page, action) {
+  if (await userHasPermission(page, action)) return null;
+  return { success: false, error: 'ليس لديك صلاحية لتنفيذ هذا الإجراء' };
+}
+
+// مسموح لو المستخدم عنده أي واحدة من الصلاحيات المطلوبة
+async function denyUnlessAny(rules) {
+  for (const [page, action] of rules) {
+    if (await userHasPermission(page, action)) return null;
+  }
+  return { success: false, error: 'ليس لديك صلاحية لتنفيذ هذا الإجراء' };
+}
+
+// للمدير فقط
+function denyUnlessAdmin() {
+  if (isAdminUser()) return null;
+  return { success: false, error: 'ليس لديك صلاحية لتنفيذ هذا الإجراء' };
 }
 
 
@@ -1808,6 +1867,8 @@ function getLocalIPAddress() {
 
 // استقبال أوامر من الواجهة
 ipcMain.handle('add-device', async (event, device) => {
+  const __denied = await denyUnless('devices', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     addDevice(device, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -1817,6 +1878,8 @@ ipcMain.handle('add-device', async (event, device) => {
 });
 
 ipcMain.handle('update-device', async (event, device) => {
+  const __denied = await denyUnless('devices', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     updateDevice(device, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -1906,6 +1969,11 @@ function startFreeOpenSession({ device_id }, cb) {
 }
 
 ipcMain.handle('start-free-session', async (event, data) => {
+  const __denied = await denyUnless('sessions', 'add');
+  if (__denied) return __denied;
+  if (!(await getActiveShiftRow())) {
+    return { success: false, error: NO_SHIFT_MSG };
+  }
   const lock = await ps4lockApplyVerified(data.device_id, 'unlock');
   if (!lock.ok) {
     return { success: false, error: 'تعذر فتح القفل على الـ PS4 ومفيش جلسة اتفتحت: ' + (lock.error || 'الجهاز لم يستجب') };
@@ -1920,6 +1988,11 @@ ipcMain.handle('start-free-session', async (event, data) => {
   });
 });
 ipcMain.handle('start-free-open-session', async (event, data) => {
+  const __denied = await denyUnless('sessions', 'add');
+  if (__denied) return __denied;
+  if (!(await getActiveShiftRow())) {
+    return { success: false, error: NO_SHIFT_MSG };
+  }
   const lock = await ps4lockApplyVerified(data.device_id, 'unlock');
   if (!lock.ok) {
     return { success: false, error: 'تعذر فتح القفل على الـ PS4 ومفيش جلسة اتفتحت: ' + (lock.error || 'الجهاز لم يستجب') };
@@ -1998,8 +2071,15 @@ function startSession({ device_id, type, duration, mode, end_time, client_id, bo
     });
   });
 }
-// إنهاء جلسة نشطة لجهاز
+// إنهاء جلسة نشطة لجهاز — ممنوع بدون شيفت مفتوح
 function endSession(device_id, cb) {
+  getActiveShiftRow().then(shift => {
+    if (!shift) return cb(new Error(NO_SHIFT_MSG));
+    endSessionInternal(device_id, cb);
+  });
+}
+
+function endSessionInternal(device_id, cb) {
   // التحقق من صحة رقم الجهاز أولاً
   validateDeviceId(device_id, (err, device) => {
     if (err) {
@@ -2118,19 +2198,20 @@ function endSession(device_id, cb) {
           const startMs = session.start_time;
           const endMs = startMs + (usedDuration * 1000);
 
-          // فترات النمط من تعديلات change_mode (نفس منطق الواجهة)
-          const modeMods = mods
-            .filter(m => m.type === 'change_mode')
+          // كل التعديلات اللي بتقسم الجلسة لفترات (تغيير النوع/النمط/تمديد) — نفس تقسيم الفاتورة
+          const changeMods = mods
+            .filter(m => ['change_mode', 'change_type', 'extra_time', 'extra_time_simple'].includes(m.type))
             .sort((a, b) => (Number(a.created_at) || 0) - (Number(b.created_at) || 0));
           const segments = [];
           let currentStart = startMs;
           let currentMode = (session.mode || 'single');
-          if (modeMods.length > 0) {
-            const firstParts = String(modeMods[0].value || '').split('->');
+          const firstModeMod = changeMods.find(m => m.type === 'change_mode');
+          if (firstModeMod) {
+            const firstParts = String(firstModeMod.value || '').split('->');
             const fromVal = (firstParts[0] || '').trim().toLowerCase();
             if (fromVal === 'single' || fromVal === 'double') currentMode = fromVal;
           }
-          for (const m of modeMods) {
+          for (const m of changeMods) {
             const changeAt = Number(m.created_at || 0);
             if (changeAt && changeAt > currentStart && changeAt < endMs) {
               segments.push({ from: currentStart, to: changeAt, mode: currentMode });
@@ -2198,6 +2279,8 @@ function deleteSession(sessionId, cb) {
 }
 
 ipcMain.handle('delete-session', async (event, sessionId) => {
+  const __denied = await denyUnless('sessions', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteSession(sessionId, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -2279,6 +2362,8 @@ function updateSession(sessionId, updates, cb) {
 }
 
 ipcMain.handle('update-session', async (event, { sessionId, updates }) => {
+  const __denied = await denyUnlessAny([['sessions', 'edit'], ['invoices', 'edit'], ['dashboard', 'edit']]);
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     updateSession(sessionId, updates, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -2469,6 +2554,12 @@ function handleVoiceMessage(ws, data) {
 
 // أوامر IPC للجلسات
 ipcMain.handle('start-session', async (event, data) => {
+  const __denied = await denyUnless('sessions', 'add');
+  if (__denied) return __denied;
+  // ممنوع فتح جلسة بدون شيفت مفتوح (قبل أي تعامل مع الـ PS4)
+  if (!(await getActiveShiftRow())) {
+    return { success: false, error: NO_SHIFT_MSG };
+  }
   // نفتح القفل على الـ PS4 ونتأكد من تغيّر الملف أولاً — الجلسة ما تبدأش غير لما الجهاز يرد
   const lock = await ps4lockApplyVerified(data.device_id, 'unlock');
   if (!lock.ok) {
@@ -2505,11 +2596,17 @@ ipcMain.handle('start-session', async (event, data) => {
   });
 });
 ipcMain.handle('end-session', async (event, device_id) => {
+  const __denied = await denyUnless('sessions', 'add');
+  if (__denied) return __denied;
   const active = await new Promise(resolve => {
     getActiveSession(device_id, (err, session) => resolve(err ? null : session));
   });
   if (!active) {
     return { success: false, error: 'لا توجد جلسة نشطة على هذا الجهاز' };
+  }
+  // ممنوع إنهاء جلسة بدون شيفت مفتوح (قبل أي تعامل مع الـ PS4)
+  if (!(await getActiveShiftRow())) {
+    return { success: false, error: NO_SHIFT_MSG };
   }
   // نقفل الـ PS4 ونتأكد من تغيّر الملف أولاً — الجلسة ما تتقفلش غير لما الجهاز يرد
   const lock = await ps4lockApplyVerified(device_id, 'lock');
@@ -3173,6 +3270,8 @@ function restoreProductComponents(productId, quantity, cb) {
 
 // أوامر IPC للمنتجات
 ipcMain.handle('add-product', async (event, product) => {
+  const __denied = await denyUnless('products', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     addProduct(product, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -3189,6 +3288,8 @@ ipcMain.handle('get-products', async () => {
   });
 });
 ipcMain.handle('update-product', async (event, product) => {
+  const __denied = await denyUnless('products', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     updateProduct(product, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -3197,6 +3298,8 @@ ipcMain.handle('update-product', async (event, product) => {
   });
 });
 ipcMain.handle('delete-product', async (event, productId) => {
+  const __denied = await denyUnless('products', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     deleteProduct(productId, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -3281,6 +3384,8 @@ ipcMain.handle('delete-customer-messages', async (event, device_id) => {
 
 // أوامر IPC للمكونات
 ipcMain.handle('add-component', async (event, component) => {
+  const __denied = await denyUnless('products', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     addComponent(component, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -3299,6 +3404,8 @@ ipcMain.handle('get-components', async () => {
 });
 
 ipcMain.handle('update-component', async (event, component) => {
+  const __denied = await denyUnless('products', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     updateComponent(component, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -3308,6 +3415,8 @@ ipcMain.handle('update-component', async (event, component) => {
 });
 
 ipcMain.handle('delete-component', async (event, componentId) => {
+  const __denied = await denyUnless('products', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     deleteComponent(componentId, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -3318,6 +3427,8 @@ ipcMain.handle('delete-component', async (event, componentId) => {
 
 // أوامر IPC لمخزون المكونات
 ipcMain.handle('update-component-inventory', async (event, { componentId, quantity, minQuantity }) => {
+  const __denied = await denyUnless('products', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     updateComponentInventory(componentId, quantity, minQuantity, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -3337,6 +3448,8 @@ ipcMain.handle('get-component-inventory', async (event, componentId) => {
 
 // أوامر IPC لمكونات المنتجات
 ipcMain.handle('add-product-component', async (event, { productId, componentId, quantityRequired }) => {
+  const __denied = await denyUnless('products', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     addProductComponent(productId, componentId, quantityRequired, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -3355,6 +3468,8 @@ ipcMain.handle('get-product-components', async (event, productId) => {
 });
 
 ipcMain.handle('update-product-component', async (event, { id, quantityRequired }) => {
+  const __denied = await denyUnless('products', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     updateProductComponent(id, quantityRequired, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -3364,6 +3479,8 @@ ipcMain.handle('update-product-component', async (event, { id, quantityRequired 
 });
 
 ipcMain.handle('delete-product-component', async (event, id) => {
+  const __denied = await denyUnless('products', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     deleteProductComponent(id, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -3383,6 +3500,8 @@ ipcMain.handle('check-product-components-availability', async (event, { productI
 
 // تنظيف السجلات المكررة في component_inventory
 ipcMain.handle('cleanup-duplicate-component-inventory', async () => {
+  const __denied = await denyUnless('products', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     cleanupDuplicateComponentInventory((err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -3664,6 +3783,8 @@ function deleteClient(id, cb) {
 }
 
 ipcMain.handle('clients-add', async (event, client) => {
+  const __denied = await denyUnless('clients', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     addClient(client, (err, id) => {
       if (err) resolve({ success: false, error: err.message });
@@ -3682,6 +3803,8 @@ ipcMain.handle('clients-get-all', async () => {
 });
 
 ipcMain.handle('clients-update', async (event, client) => {
+  const __denied = await denyUnless('clients', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     updateClient(client, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -3691,6 +3814,8 @@ ipcMain.handle('clients-update', async (event, client) => {
 });
 
 ipcMain.handle('clients-delete', async (event, id) => {
+  const __denied = await denyUnless('clients', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteClient(id, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -3701,6 +3826,8 @@ ipcMain.handle('clients-delete', async (event, id) => {
 
 // رصيد العملاء
 ipcMain.handle('clients-add-balance', async (event, { client_id, amount }) => {
+  const __denied = await denyUnless('clients', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     if (!client_id || amount === undefined) return resolve({ success: false, error: 'بيانات غير صالحة' });
     db.run('UPDATE clients SET balance = COALESCE(balance, 0) + ? WHERE id = ?', [amount, client_id], function(err) {
@@ -3713,6 +3840,8 @@ ipcMain.handle('clients-add-balance', async (event, { client_id, amount }) => {
   });
 });
 ipcMain.handle('clients-deduct-balance', async (event, { client_id, amount }) => {
+  const __denied = await denyUnless('clients', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     if (!client_id || amount === undefined) return resolve({ success: false, error: 'بيانات غير صالحة' });
     db.run('UPDATE clients SET balance = COALESCE(balance, 0) - ? WHERE id = ? AND COALESCE(balance, 0) >= ?', [amount, client_id, amount], function(err) {
@@ -3771,6 +3900,8 @@ function deleteBooking(id, cb) {
 }
 
 ipcMain.handle('bookings-add', async (event, booking) => {
+  const __denied = await denyUnless('bookings', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     addBooking(booking, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -3818,6 +3949,8 @@ ipcMain.handle('bookings-get-upcoming', async () => {
   });
 });
 ipcMain.handle('bookings-update', async (event, booking) => {
+  const __denied = await denyUnless('bookings', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     db.get('SELECT status FROM bookings WHERE id = ?', [booking.id], (e, old) => {
       const oldStatus = old?.status || '';
@@ -3843,6 +3976,8 @@ ipcMain.handle('bookings-update', async (event, booking) => {
   });
 });
 ipcMain.handle('bookings-delete', async (event, id) => {
+  const __denied = await denyUnless('bookings', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteBooking(id, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -3955,6 +4090,8 @@ function markDebtAsPaid(id, cb) {
 
 // أوامر IPC للمديونيات
 ipcMain.handle('debts-add', async (event, debt) => {
+  const __denied = await denyUnless('debts', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     addDebt(debt, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -3981,6 +4118,8 @@ ipcMain.handle('debts-get-all', async () => {
   });
 });
 ipcMain.handle('debts-update', async (event, debt) => {
+  const __denied = await denyUnless('debts', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     updateDebt(debt, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -3989,6 +4128,8 @@ ipcMain.handle('debts-update', async (event, debt) => {
   });
 });
 ipcMain.handle('debts-delete', async (event, id) => {
+  const __denied = await denyUnless('debts', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteDebt(id, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -3997,6 +4138,8 @@ ipcMain.handle('debts-delete', async (event, id) => {
   });
 });
 ipcMain.handle('debts-mark-paid', async (event, id) => {
+  const __denied = await denyUnless('debts', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     db.get('SELECT client_name, amount FROM debts WHERE id = ?', [id], (e, debt) => {
       markDebtAsPaid(id, (err) => {
@@ -4010,6 +4153,8 @@ ipcMain.handle('debts-mark-paid', async (event, id) => {
   });
 });
 ipcMain.handle('debts-pay-partial', async (event, { debt_id, amount }) => {
+  const __denied = await denyUnless('debts', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     if (!debt_id || !amount || amount <= 0) {
       return resolve({ success: false, error: 'بيانات غير صالحة' });
@@ -4082,6 +4227,8 @@ function deleteTrustDeposit(id, cb) {
 }
 
 ipcMain.handle('trust-add', async (event, data) => {
+  const __denied = await denyUnless('debts', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     addTrustDeposit(data, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -4109,6 +4256,8 @@ ipcMain.handle('trust-get-all', async () => {
   });
 });
 ipcMain.handle('trust-delete', async (event, id) => {
+  const __denied = await denyUnless('debts', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteTrustDeposit(id, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -4122,6 +4271,8 @@ function getSessionProducts(session_id, cb) {
 
 // أوامر IPC لمبيعات المنتجات المرتبطة بجلسة
 ipcMain.handle('add-product-to-session', async (event, data) => {
+  const __denied = await denyUnless('products', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     addProductToSession(data, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -4208,6 +4359,8 @@ function deleteSessionProduct(sessionProductId, cb) {
 }
 // أوامر IPC
 ipcMain.handle('update-session-product-qty', async (event, { sessionProductId, qty }) => {
+  const __denied = await denyUnless('products', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     updateSessionProductQty(sessionProductId, qty, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -4216,6 +4369,8 @@ ipcMain.handle('update-session-product-qty', async (event, { sessionProductId, q
   });
 });
 ipcMain.handle('delete-session-product', async (event, sessionProductId) => {
+  const __denied = await denyUnless('products', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     deleteSessionProduct(sessionProductId, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -5133,6 +5288,8 @@ function getMaintenanceByType(type, cb) {
 
 // أوامر IPC للمبيعات المنفصلة
 ipcMain.handle('add-standalone-sale', async (event, data) => {
+  const __denied = await denyUnless('products', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     addStandaloneSale(data, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -5150,6 +5307,8 @@ ipcMain.handle('get-standalone-sales', async () => {
 });
 
 ipcMain.handle('update-standalone-sale', async (event, { saleId, updates }) => {
+  const __denied = await denyUnless('products', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     updateStandaloneSale(saleId, updates, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -5159,6 +5318,8 @@ ipcMain.handle('update-standalone-sale', async (event, { saleId, updates }) => {
 });
 
 ipcMain.handle('delete-standalone-sale', async (event, saleId) => {
+  const __denied = await denyUnless('products', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteStandaloneSale(saleId, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -5177,6 +5338,8 @@ function getInternalKidsAreaProductId(cb) {
 
 // تسجيل إيراد Kids Area كمبيعة منفصلة (يظهر في الشيفت النشط والتقارير)
 ipcMain.handle('record-kids-area-sale', async (event, { unitPrice }) => {
+  const __denied = await denyUnless('kids-area', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     const price = Number(unitPrice);
     if (isNaN(price) || price < 0) return resolve({ success: false, error: 'سعر غير صالح' });
@@ -5192,6 +5355,8 @@ ipcMain.handle('record-kids-area-sale', async (event, { unitPrice }) => {
 
 // أوامر IPC للمصروفات
 ipcMain.handle('add-expense', async (event, expense) => {
+  const __denied = await denyUnless('expenses', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     addExpense(expense, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -5201,6 +5366,8 @@ ipcMain.handle('add-expense', async (event, expense) => {
 });
 
 ipcMain.handle('update-expense', async (event, expense) => {
+  const __denied = await denyUnless('expenses', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     updateExpense(expense, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -5210,6 +5377,8 @@ ipcMain.handle('update-expense', async (event, expense) => {
 });
 
 ipcMain.handle('delete-expense', async (event, expenseId) => {
+  const __denied = await denyUnless('expenses', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     deleteExpense(expenseId, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -5311,6 +5480,8 @@ ipcMain.handle('get-expenses-statistics', async (event, { startDate, endDate }) 
 
 // أوامر IPC للصيانة
 ipcMain.handle('add-maintenance', async (event, maintenance) => {
+  const __denied = await denyUnless('maintenance', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     addMaintenance(maintenance, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -5320,6 +5491,8 @@ ipcMain.handle('add-maintenance', async (event, maintenance) => {
 });
 
 ipcMain.handle('update-maintenance', async (event, maintenance) => {
+  const __denied = await denyUnless('maintenance', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     updateMaintenance(maintenance, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -5329,6 +5502,8 @@ ipcMain.handle('update-maintenance', async (event, maintenance) => {
 });
 
 ipcMain.handle('delete-maintenance', async (event, maintenanceId) => {
+  const __denied = await denyUnless('maintenance', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     deleteMaintenance(maintenanceId, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -5689,19 +5864,25 @@ function getControllers(cb) {
   db.all('SELECT * FROM controllers ORDER BY id DESC', cb);
 }
 
-ipcMain.handle('add-controller', async (event, data) => new Promise(resolve => {
+ipcMain.handle('add-controller', async (event, data) => new Promise(async resolve => {
+  const __denied = await denyUnless('maintenance', 'add');
+  if (__denied) return resolve(__denied);
   addController(data, err => {
     if (err) resolve({ success: false, error: err.message });
     else resolve({ success: true });
   });
 }));
-ipcMain.handle('update-controller', async (event, data) => new Promise(resolve => {
+ipcMain.handle('update-controller', async (event, data) => new Promise(async resolve => {
+  const __denied = await denyUnless('maintenance', 'edit');
+  if (__denied) return resolve(__denied);
   updateController(data, err => {
     if (err) resolve({ success: false, error: err.message });
     else resolve({ success: true });
   });
 }));
-ipcMain.handle('delete-controller', async (event, id) => new Promise(resolve => {
+ipcMain.handle('delete-controller', async (event, id) => new Promise(async resolve => {
+  const __denied = await denyUnless('maintenance', 'delete');
+  if (__denied) return resolve(__denied);
   deleteController(id, err => {
     if (err) resolve({ success: false, error: err.message });
     else resolve({ success: true });
@@ -5912,6 +6093,9 @@ function checkLogin(username, password, cb) {
   db.get('SELECT id, username, role, permissions FROM users WHERE username = ? AND password = ?', [username, password], cb);
 }
 ipcMain.handle('get-user-permissions', async (event, userId) => {
+  // المستخدم يقدر يجيب صلاحياته هو بس، أو المدير لأي حد
+  const canRead = isAdminUser() || (authUser && Number(authUser.id) === Number(userId));
+  if (!canRead) return [];
   return new Promise((resolve) => {
     getUserPermissions(userId, (err, rows) => {
       if (err) resolve([]);
@@ -5921,6 +6105,8 @@ ipcMain.handle('get-user-permissions', async (event, userId) => {
 });
 
 ipcMain.handle('set-user-permissions', async (event, { userId, permissions }) => {
+  const __denied = denyUnlessAdmin();
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     setUserPermissions(userId, permissions, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -5930,6 +6116,9 @@ ipcMain.handle('set-user-permissions', async (event, { userId, permissions }) =>
 });
 
 ipcMain.handle('check-user-permission', async (event, { userId, page, action }) => {
+  // المستخدم يفحص صلاحياته هو بس، أو المدير لأي حد
+  const canRead = isAdminUser() || (authUser && Number(authUser.id) === Number(userId));
+  if (!canRead) return false;
   return new Promise((resolve) => {
     checkUserPermission(userId, page, action, (err, hasPermission) => {
       if (err) resolve(false);
@@ -5963,6 +6152,8 @@ ipcMain.handle('get-all-pages', async () => {
 });
 
 ipcMain.handle('fix-user-permissions', async (event) => {
+  const __denied = denyUnlessAdmin();
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     fixUserPermissions((err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -5973,6 +6164,8 @@ ipcMain.handle('fix-user-permissions', async (event) => {
 
 // أوامر IPC للمستخدمين
 ipcMain.handle('add-user', async (event, user) => {
+  const __denied = denyUnlessAdmin();
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     addUser(user, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -5981,6 +6174,8 @@ ipcMain.handle('add-user', async (event, user) => {
   });
 });
 ipcMain.handle('update-user', async (event, user) => {
+  const __denied = denyUnlessAdmin();
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     updateUser(user, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -5989,6 +6184,8 @@ ipcMain.handle('update-user', async (event, user) => {
   });
 });
 ipcMain.handle('delete-user', async (event, userId) => {
+  const __denied = denyUnlessAdmin();
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteUser(userId, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -6007,6 +6204,8 @@ ipcMain.handle('get-users', async () => {
 
 // --- أهداف الموظفين ---
 ipcMain.handle('set-employee-target', async (event, { user_id, target_amount, period, bonus_amount, daily_wage }) => {
+  const __denied = await denyUnless('employees', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     db.run(`INSERT INTO employee_targets (user_id, target_amount, bonus_amount, daily_wage, period, updated_at) VALUES (?, ?, ?, ?, ?, strftime('%s','now')*1000)
       ON CONFLICT(user_id, period) DO UPDATE SET target_amount = excluded.target_amount, bonus_amount = excluded.bonus_amount, daily_wage = excluded.daily_wage, updated_at = strftime('%s','now')*1000`,
@@ -6070,6 +6269,8 @@ ipcMain.handle('get-employee-payments', async (event, { date }) => {
 });
 
 ipcMain.handle('create-employee-payment', async (event, { user_id, payment_date, target_amount, bonus_amount, total_amount }) => {
+  const __denied = await denyUnless('employees', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     db.run(`INSERT INTO employee_payments (user_id, payment_date, target_amount, bonus_amount, total_amount) VALUES (?, ?, ?, ?, ?)`,
       [user_id, payment_date, target_amount, bonus_amount, total_amount], (err) => {
@@ -6090,6 +6291,8 @@ ipcMain.handle('get-offers', async () => {
 });
 
 ipcMain.handle('create-offer', async (event, { name, description, type, condition_value, reward_value }) => {
+  const __denied = await denyUnless('offers', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     db.run('INSERT INTO offers (name, description, type, condition_value, reward_value) VALUES (?, ?, ?, ?, ?)',
       [name, description, type, condition_value, reward_value], function (err) {
@@ -6100,6 +6303,8 @@ ipcMain.handle('create-offer', async (event, { name, description, type, conditio
 });
 
 ipcMain.handle('update-offer', async (event, { id, name, description, type, condition_value, reward_value }) => {
+  const __denied = await denyUnless('offers', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     db.run('UPDATE offers SET name = ?, description = ?, type = ?, condition_value = ?, reward_value = ? WHERE id = ?',
       [name, description, type, condition_value, reward_value, id], (err) => {
@@ -6110,6 +6315,8 @@ ipcMain.handle('update-offer', async (event, { id, name, description, type, cond
 });
 
 ipcMain.handle('toggle-offer', async (event, { id, is_active }) => {
+  const __denied = await denyUnless('offers', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     db.run('UPDATE offers SET is_active = ? WHERE id = ?', [is_active ? 1 : 0, id], (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -6119,6 +6326,8 @@ ipcMain.handle('toggle-offer', async (event, { id, is_active }) => {
 });
 
 ipcMain.handle('delete-offer', async (event, id) => {
+  const __denied = await denyUnless('offers', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     db.run('DELETE FROM offers WHERE id = ?', [id], (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -6128,55 +6337,39 @@ ipcMain.handle('delete-offer', async (event, id) => {
 });
 
 ipcMain.handle('check-login', async (event, { username, password }) => {
-  return new Promise((resolve) => {
-    checkLogin(username, password, (err, user) => {
-      if (err || !user) resolve(null);
-      else {
-        resolve(user);
-        console.log(user);
-        getSetting('telegram_bot_token', (e1, token) => {
-          
-          if (e1) {
-            console.log('⚠️ خطأ في جلب التوكن:', e1.message);
-            return resolve({ success: true, ...result });
-          }
-          if (!token) {
-            console.log('⚠️ لا يوجد توكن تيليجرام محفوظ');
-            return resolve({ success: true, ...result });
-          }
-          console.log('✅ تم العثور على التوكن');
-          getAllTelegramChats((e2, chats) => {
-            console.log(chats);
-            if (e2) {
-              console.log('⚠️ خطأ في جلب قائمة الشاتات:', e2.message);
-              return resolve({ success: true, ...result });
-            }
-            if (!chats || chats.length === 0) {
-              console.log('⚠️ لا توجد شاتات محفوظة. يرجى إرسال /start للبوت أولاً');
-              return resolve({ success: true, ...result });
-            }
-            const chatIds = chats.map(c => c.chat_id);
-            console.log('✅ تم العثور على', chatIds.length, 'شات ');
-            chatIds.forEach(chatId => {
-              sendTelegramMessage(token, chatId, `تم تسجيل الدخول ب ${user.username}`, (err) => {
-                if (err) {
-                  console.log('⚠️ خطأ في إرسال الرسالة:', err.message);
-                } else {
-                  console.log('✅ تم إرسال الرسالة بنجاح');
-                }
-              });
-            });
-
-
-            
-          });
-        });
-      }
-    });
+  const user = await new Promise((resolve) => {
+    checkLogin(username, password, (err, u) => resolve(err ? null : u));
   });
+  if (!user) {
+    setAuthUser(null);
+    return null;
+  }
+  // تسجيل المستخدم الحالي في العملية الرئيسية (لصلاحيات كل العمليات بعد كده)
+  setAuthUser(user);
+  // إشعار تيليجرام (اختياري) — ما يأثرش على نتيجة الدخول
+  try {
+    getSetting('telegram_bot_token', (e1, token) => {
+      if (e1 || !token) return;
+      getAllTelegramChats((e2, chats) => {
+        if (e2 || !chats || chats.length === 0) return;
+        chats.map(c => c.chat_id).forEach(chatId => {
+          sendTelegramMessage(token, chatId, `تم تسجيل الدخول ب ${user.username}`, () => {});
+        });
+      });
+    });
+  } catch (e) { /* تجاهل */ }
+  return user;
+});
+
+// تسجيل الخروج (تصفير المستخدم الحالي في العملية الرئيسية)
+ipcMain.handle('auth-logout', async () => {
+  setAuthUser(null);
+  return { success: true };
 });
 
 ipcMain.handle('backup-database', async () => {
+  const __denied = await denyUnless('backup', 'add');
+  if (__denied) return __denied;
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: 'حفظ نسخة احتياطية',
     defaultPath: `ps-backup-${new Date().toISOString().slice(0, 10)}.db`,
@@ -6192,6 +6385,8 @@ ipcMain.handle('backup-database', async () => {
 });
 
 ipcMain.handle('restore-database', async () => {
+  const __denied = await denyUnless('backup', 'edit');
+  if (__denied) return __denied;
   const { canceled, filePaths } = await dialog.showOpenDialog({
     title: 'استعادة نسخة احتياطية',
     filters: [{ name: 'SQLite DB', extensions: ['db'] }],
@@ -6236,6 +6431,8 @@ function transferSession({ from, to }, cb) {
 }
 
 ipcMain.handle('transfer-session', async (event, data) => {
+  const __denied = await denyUnless('sessions', 'add');
+  if (__denied) return __denied;
   // نفتح القفل على الجهاز الجديد أولاً ونتأكد منه
   const unlock = await ps4lockApplyVerified(data.to, 'unlock');
   if (!unlock.ok) {
@@ -6289,6 +6486,8 @@ ipcMain.handle('ps4lock-status-all', async () => {
 
 // اختبار الاتصال بجهاز واحد
 ipcMain.handle('ps4lock-test-device', async (event, deviceId) => {
+  const __denied = await denyUnlessAny([['devices', 'edit'], ['settings', 'edit']]);
+  if (__denied) return __denied;
   return new Promise(resolve => {
     applyPs4Lock(deviceId, 'status', (err, res) => {
       if (err) resolve({ success: false, error: err.message });
@@ -6304,6 +6503,8 @@ ipcMain.handle('ps4lock-test-device', async (event, deviceId) => {
 
 // قفل/فتح يدوي لجهاز (اختياري - لأزرار التحكم اليدوي)
 ipcMain.handle('ps4lock-command', async (event, { deviceId, command }) => {
+  const __denied = await denyUnless('devices', 'edit');
+  if (__denied) return __denied;
   if (!['lock', 'unlock', 'status'].includes(command)) {
     return { success: false, error: 'أمر غير صالح' };
   }
@@ -6324,6 +6525,8 @@ ipcMain.handle('get-ps4lock-settings', async () => {
   });
 });
 ipcMain.handle('set-ps4lock-settings', async (event, settings) => {
+  const __denied = await denyUnless('settings', 'edit');
+  if (__denied) return __denied;
   return new Promise(resolve => {
     const token = String((settings && settings.token) || '').trim() || PS4LOCK_DEFAULT_TOKEN;
     setSetting('ps4lock_token', token, (e) => {
@@ -6354,17 +6557,20 @@ function addExtraTimeToSession({ device_id, hours, minutes }, cb) {
         addSessionModification({ session_id: session.id, type: 'extra_time', value: extraSeconds.toString(), price: null }, cb);
       });
     } else {
-      // الطريقة القديمة: لتجنب الازدواجية في الحساب، قم بتحديث مدة الجلسة فقط بدون تسجيل تعديل إضافي
+      // الطريقة القديمة: نحدّث مدة الجلسة (بدون احتساب مزدوج في الفاتورة)
       const newDuration = (session.duration || 0) + extraSeconds;
       db.run('UPDATE sessions SET duration = ? WHERE id = ?', [newDuration, session.id], function (updateErr) {
         if (updateErr) return cb(updateErr);
-        cb();
+        // بنسجل التمديد للعرض في جدول فترات الفاتورة (النوع ده مش بيتحسب مرتين)
+        addSessionModification({ session_id: session.id, type: 'extra_time_simple', value: extraSeconds.toString(), price: null }, () => cb());
       });
     }
   });
 }
 
 ipcMain.handle('add-extra-time-to-session', async (event, data) => {
+  const __denied = await denyUnless('sessions', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     addExtraTimeToSession(data, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -6396,14 +6602,16 @@ function updateSessionTypeOrMode({ device_id, newType, newMode, duration }, cb) 
     if (newType && newType !== session.type) {
       updates.push({ field: 'type', value: newType });
       mods.push({ session_id: session.id, type: 'change_type', value: `${session.type}->${newType}`, price: null });
-      // إذا تم التحويل إلى مؤقتة وتم إرسال مدة جديدة
+      // عند التحويل لمؤقتة: الوقت اللي اتلعب بيتحفظ، والمدة المدخلة بتتضاف من دلوقتي
       if (newType === 'timed' && duration && duration > 0) {
-        updates.push({ field: 'duration', value: duration });
-        // إذا كان هناك وقت انتهاء محدد مسبقاً، احسبه من المدة الجديدة
-        if (session.scheduled_end_time) {
-          const newEndTime = session.start_time + (duration * 1000);
-          updates.push({ field: 'scheduled_end_time', value: newEndTime });
-        }
+        const nowMs = Date.now();
+        const elapsedSeconds = Math.max(0, Math.floor((nowMs - (session.start_time || nowMs)) / 1000));
+        updates.push({ field: 'duration', value: elapsedSeconds + duration });
+        updates.push({ field: 'scheduled_end_time', value: nowMs + (duration * 1000) });
+      }
+      // عند التحويل لمفتوحة: نشيل وقت الانتهاء المحدد (المحاسبة بتبقى على الوقت الفعلي)
+      if (newType === 'open') {
+        updates.push({ field: 'scheduled_end_time', value: null });
       }
     }
     if (newMode && newMode !== session.mode) {
@@ -6431,6 +6639,8 @@ function updateSessionTypeOrMode({ device_id, newType, newMode, duration }, cb) 
 }
 
 ipcMain.handle('update-session-type-or-mode', async (event, data) => {
+  const __denied = await denyUnless('sessions', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     updateSessionTypeOrMode(data, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -6452,6 +6662,8 @@ function deleteDevice(deviceId, cb) {
 }
 
 ipcMain.handle('delete-device', async (event, deviceId) => {
+  const __denied = await denyUnless('devices', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve, reject) => {
     deleteDevice(deviceId, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -6462,6 +6674,8 @@ ipcMain.handle('delete-device', async (event, deviceId) => {
 
 // حفظ صورة الجهاز فعليًا في مجلد devices/
 ipcMain.handle('save-device-image', async (event, filePath) => {
+  const __denied = await denyUnlessAny([['devices', 'add'], ['devices', 'edit']]);
+  if (__denied) return __denied;
   try {
     const devicesDir = path.join(__dirname, 'devices');
     if (!fs.existsSync(devicesDir)) fs.mkdirSync(devicesDir);
@@ -6476,6 +6690,8 @@ ipcMain.handle('save-device-image', async (event, filePath) => {
 });
 
 ipcMain.handle('save-product-image', async (event, filePath) => {
+  const __denied = await denyUnlessAny([['products', 'add'], ['products', 'edit']]);
+  if (__denied) return __denied;
   try {
     const productsDir = path.join(__dirname, 'products');
     if (!fs.existsSync(productsDir)) fs.mkdirSync(productsDir);
@@ -6532,6 +6748,8 @@ function deleteTournament(id, cb) {
 
 // --- أوامر IPC للدورات ---
 ipcMain.handle('save-tournament', async (event, data) => {
+  const __denied = await denyUnlessAny([['tournaments', 'add'], ['tournaments', 'edit']]);
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     saveTournament(data, (err, result) => {
       if (err) resolve({ success: false, error: err.message });
@@ -6556,6 +6774,8 @@ ipcMain.handle('get-tournament-by-id', async (event, id) => {
   });
 });
 ipcMain.handle('delete-tournament', async (event, id) => {
+  const __denied = await denyUnless('tournaments', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteTournament(id, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -6591,6 +6811,8 @@ function deleteTournamentMatch(match_id, cb) {
 
 // --- أوامر IPC للاعبين والمباريات ---
 ipcMain.handle('add-tournament-player', async (event, data) => {
+  const __denied = await denyUnless('tournaments', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     addTournamentPlayer(data, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -6607,6 +6829,8 @@ ipcMain.handle('get-tournament-players', async (event, tournament_id) => {
   });
 });
 ipcMain.handle('delete-tournament-player', async (event, player_id) => {
+  const __denied = await denyUnless('tournaments', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteTournamentPlayer(player_id, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -6615,6 +6839,8 @@ ipcMain.handle('delete-tournament-player', async (event, player_id) => {
   });
 });
 ipcMain.handle('add-tournament-match', async (event, data) => {
+  const __denied = await denyUnless('tournaments', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     addTournamentMatch(data, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -6623,6 +6849,8 @@ ipcMain.handle('add-tournament-match', async (event, data) => {
   });
 });
 ipcMain.handle('update-tournament-match-result', async (event, data) => {
+  const __denied = await denyUnless('tournaments', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     updateTournamentMatchResult(data, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -6639,6 +6867,8 @@ ipcMain.handle('get-tournament-matches', async (event, tournament_id) => {
   });
 });
 ipcMain.handle('delete-tournament-match', async (event, match_id) => {
+  const __denied = await denyUnless('tournaments', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteTournamentMatch(match_id, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -6767,6 +6997,8 @@ ipcMain.handle('get-shop-settings', async () => {
 });
 
 ipcMain.handle('update-shop-settings', async (event, data) => {
+  const __denied = await denyUnless('settings', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     updateShopSettings(data, err => {
       if (err) resolve({ success: false, error: err.message });
@@ -7158,6 +7390,8 @@ function getShiftDetails(shift_id, cb) {
 
 // --- أوامر IPC للشيفتات ---
 ipcMain.handle('start-shift', async (event, data) => {
+  const __denied = await denyUnless('shifts', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     startShift(data, (err, result) => {
       if (err) resolve({ success: false, error: err.message });
@@ -7167,7 +7401,21 @@ ipcMain.handle('start-shift', async (event, data) => {
 });
 
 ipcMain.handle('end-shift', async (event, data) => {
-  return new Promise((resolve) => {
+  const __denied = await denyUnless('shifts', 'add');
+  if (__denied) return __denied;
+  return new Promise(async (resolve) => {
+    // منع إنهاء الشيفت لو فيه جلسات مفتوحة (عشان الجلسات تقدر تتقفل قبل الشيفت)
+    const activeSessionsCount = await new Promise(r => {
+      db.get('SELECT COUNT(*) as cnt FROM sessions WHERE is_active = 1', (e, row) => {
+        r(e ? 0 : (row && row.cnt ? row.cnt : 0));
+      });
+    });
+    if (activeSessionsCount > 0) {
+      return resolve({
+        success: false,
+        error: `لا يمكن إنهاء الشيفت وفيه ${activeSessionsCount} جلسة مفتوحة. يرجى إنهاء الجلسات أولاً`
+      });
+    }
     endShift(data, (err, result) => {
       console.log(result);
       
@@ -7281,6 +7529,8 @@ ipcMain.handle('get-shifts-page', async (event, { page = 1, limit = 20 }) => {
 
 // IPC لإعدادات تيليجرام
 ipcMain.handle('set-telegram-settings', async (event, { botToken, chatId }) => {
+  const __denied = await denyUnless('settings', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     setSetting('telegram_bot_token', botToken || '', (e1) => {
       if (e1) return resolve({ success: false, error: e1.message });
@@ -7311,6 +7561,8 @@ ipcMain.handle('get-telegram-settings', async () => {
 
 // IPC لإدارة الشاتات
 ipcMain.handle('add-telegram-chat', async (event, chatId) => {
+  const __denied = await denyUnless('settings', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     addTelegramChat(chatId, (err) => {
       if (err) return resolve({ success: false, error: err.message });
@@ -7319,6 +7571,8 @@ ipcMain.handle('add-telegram-chat', async (event, chatId) => {
   });
 });
 ipcMain.handle('remove-telegram-chat', async (event, chatId) => {
+  const __denied = await denyUnless('settings', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     removeTelegramChat(chatId, (err) => {
       if (err) return resolve({ success: false, error: err.message });
@@ -7510,6 +7764,8 @@ function fixShiftsTable(cb) {
 }
 
 ipcMain.handle('update-shift-opening-cash', async (event, { shift_id, opening_cash }) => {
+  const __denied = await denyUnless('shifts', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     db.run('UPDATE shifts SET opening_cash = ? WHERE id = ?', [opening_cash, shift_id], function(err) {
       if (err) resolve({ success: false, error: err.message });
@@ -7519,6 +7775,8 @@ ipcMain.handle('update-shift-opening-cash', async (event, { shift_id, opening_ca
 });
 
 ipcMain.handle('fix-shifts-table', async () => {
+  const __denied = denyUnlessAdmin();
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     fixShiftsTable((err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -7528,6 +7786,8 @@ ipcMain.handle('fix-shifts-table', async () => {
 });
 
 ipcMain.handle('fix-all-shifts-issues', async () => {
+  const __denied = denyUnlessAdmin();
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     fixAllShiftsIssues((err, result) => {
       if (err) resolve({ success: false, error: err.message });
@@ -7597,6 +7857,8 @@ function backupShiftsData(cb) {
 }
 
 ipcMain.handle('backup-shifts-data', async () => {
+  const __denied = denyUnlessAdmin();
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     backupShiftsData((err, data) => {
       if (err) resolve({ success: false, error: err.message });
@@ -7636,6 +7898,8 @@ function fixShiftsTypeIssue(cb) {
 }
 
 ipcMain.handle('fix-shifts-type-issue', async () => {
+  const __denied = denyUnlessAdmin();
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     fixShiftsTypeIssue((err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -8343,6 +8607,8 @@ ipcMain.handle('hotspot-get-settings', async () => {
 });
 
 ipcMain.handle('hotspot-save-settings', async (event, settings) => {
+  const __denied = await denyUnless('hotspot', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     saveHotspotSettings(settings, (err) => {
       if (err) resolve({ success: false, error: err.message });
@@ -8373,6 +8639,8 @@ ipcMain.handle('hotspot-get-users', async () => {
 });
 
 ipcMain.handle('hotspot-add-user', async (event, userData) => {
+  const __denied = await denyUnless('hotspot', 'add');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     loadHotspotSettings((err, settings) => {
       if (err) return resolve({ success: false, error: err.message });
@@ -8385,6 +8653,8 @@ ipcMain.handle('hotspot-add-user', async (event, userData) => {
 });
 
 ipcMain.handle('hotspot-delete-user', async (event, userId) => {
+  const __denied = await denyUnless('hotspot', 'delete');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     loadHotspotSettings((err, settings) => {
       if (err) return resolve({ success: false, error: err.message });
@@ -8397,6 +8667,8 @@ ipcMain.handle('hotspot-delete-user', async (event, userId) => {
 });
 
 ipcMain.handle('hotspot-toggle-user', async (event, { userId, disabled }) => {
+  const __denied = await denyUnless('hotspot', 'edit');
+  if (__denied) return __denied;
   return new Promise((resolve) => {
     loadHotspotSettings((err, settings) => {
       if (err) return resolve({ success: false, error: err.message });
