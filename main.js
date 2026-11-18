@@ -805,19 +805,8 @@ db.serialize(() => {
       db.run('INSERT INTO shop_settings (shop_name) VALUES (?)', ['PS Game Center']);
     }
   });
-  // منتج داخلي لتسجيل مبيعات Kids Area في المبيعات المنفصلة (الشيفتات والتقارير)
-  db.get(`SELECT id FROM products WHERE category = '__internal_kids_area__' LIMIT 1`, (err, row) => {
-    if (err) return;
-    if (!row) {
-      db.run(
-        `INSERT INTO products (name, price, category, quantity) VALUES ('Kids Area', 0, '__internal_kids_area__', 999999)`,
-        (e) => {
-          if (e) console.error('تهيئة منتج Kids Area:', e);
-          else console.log('تم تهيئة منتج Kids Area الداخلي للتقارير');
-        }
-      );
-    }
-  });
+  // ترحيل مبيعات Kids Area: من غير منتج داخلي في جدول المنتجات
+  migrateKidsAreaSalesTable();
   // عند تهيئة قاعدة البيانات أضف عمود trial_days إذا لم يكن موجوداً
   db.get("PRAGMA table_info(trial_info)", (err, row) => {
     db.all("PRAGMA table_info(trial_info)", (err, columns) => {
@@ -2781,10 +2770,15 @@ ipcMain.handle('get-filtered-standalone-sales', async (event, { startDate, endDa
     countSql += ` AND ss.date >= ? AND ss.date <= ?`;
     countParams.push(s, e);
     if (category) {
-      sql += ` AND p.category = ?`;
-      params.push(category);
-      countSql += ` AND ss.product_id IN (SELECT id FROM products WHERE category = ?)`;
-      countParams.push(category);
+      if (category === '__internal_kids_area__') {
+        sql += ` AND ss.is_kids_area = 1`;
+        countSql += ` AND ss.is_kids_area = 1`;
+      } else {
+        sql += ` AND p.category = ?`;
+        params.push(category);
+        countSql += ` AND ss.product_id IN (SELECT id FROM products WHERE category = ?)`;
+        countParams.push(category);
+      }
     }
     sql += ` ORDER BY ss.date DESC LIMIT ? OFFSET ?`;
     params.push(limit, (page - 1) * limit);
@@ -4380,7 +4374,17 @@ ipcMain.handle('delete-session-product', async (event, sessionProductId) => {
 });
 
 // دوال المبيعات المنفصلة
-function addStandaloneSale({ product_id, quantity, price }, cb) {
+function addStandaloneSale({ product_id, quantity, price, is_kids_area }, cb) {
+  // مبيعات Kids Area مش مرتبطة بمنتج → مفيش خصم مخزون ولا مكونات
+  if (!product_id) {
+    const qty = Number(quantity) || 1;
+    const unitPrice = Number(price) || 0;
+    return db.run(
+      'INSERT INTO standalone_sales (product_id, quantity, price, total, date, is_kids_area) VALUES (NULL, ?, ?, ?, ?, ?)',
+      [qty, unitPrice, unitPrice * qty, Date.now(), is_kids_area ? 1 : 0],
+      (err) => cb(err)
+    );
+  }
   // التحقق من توفر المكونات أولاً
   checkProductComponentsAvailability(product_id, quantity, (err, availability) => {
     if (err) return cb(err);
@@ -4394,7 +4398,7 @@ function addStandaloneSale({ product_id, quantity, price }, cb) {
     
     const total = price * quantity;
     const date = Date.now();
-    db.run('INSERT INTO standalone_sales (product_id, quantity, price, total, date) VALUES (?, ?, ?, ?, ?)', [product_id, quantity, price, total, date], function (err) {
+    db.run('INSERT INTO standalone_sales (product_id, quantity, price, total, date, is_kids_area) VALUES (?, ?, ?, ?, ?, ?)', [product_id, quantity, price, total, date, is_kids_area ? 1 : 0], function (err) {
       if (err) return cb(err);
       
       // خصم المكونات من المخزون
@@ -5328,27 +5332,51 @@ ipcMain.handle('delete-standalone-sale', async (event, saleId) => {
   });
 });
 
-function getInternalKidsAreaProductId(cb) {
-  db.get(`SELECT id FROM products WHERE category = '__internal_kids_area__' LIMIT 1`, (err, row) => {
-    if (err) return cb(err);
-    if (!row) return cb(new Error('منتج Kids Area الداخلي غير موجود — أعد تشغيل التطبيق'));
-    cb(null, row.id);
+// ترحيل: إضافة عمود is_kids_area للمبيعات المنفصلة، تحويل مبيعات Kids Area القديمة،
+// وحذف المنتج الداخلي 'Kids Area' من جدول المنتجات نهائيًا.
+function migrateKidsAreaSalesTable(cb) {
+  cb = cb || (() => {});
+  db.all('PRAGMA table_info(standalone_sales)', (err, cols) => {
+    if (err) {
+      console.error('فحص أعمدة المبيعات المنفصلة:', err.message);
+      return cb(err);
+    }
+    const afterColumn = () => {
+      // علّم مبيعات المنتج الداخلي القديمة قبل حذفه
+      db.run(
+        `UPDATE standalone_sales SET is_kids_area = 1, product_id = NULL
+         WHERE product_id IN (SELECT id FROM products WHERE category = '__internal_kids_area__')`,
+        (e1) => {
+          if (e1) console.error('تعليم مبيعات Kids Area:', e1.message);
+          db.run(`DELETE FROM products WHERE category = '__internal_kids_area__'`, (e2) => {
+            if (e2) console.error('حذف منتج Kids Area الداخلي:', e2.message);
+            else console.log('✅ تم حذف منتج Kids Area الداخلي من المنتجات');
+            cb(null);
+          });
+        }
+      );
+    };
+    if (cols.some(c => c.name === 'is_kids_area')) return afterColumn();
+    db.run('ALTER TABLE standalone_sales ADD COLUMN is_kids_area INTEGER DEFAULT 0', (e) => {
+      if (e) {
+        console.error('إضافة عمود is_kids_area:', e.message);
+        return cb(e);
+      }
+      afterColumn();
+    });
   });
 }
 
-// تسجيل إيراد Kids Area كمبيعة منفصلة (يظهر في الشيفت النشط والتقارير)
+// تسجيل إيراد Kids Area كمبيعة منفصلة (من غير منتج في جدول المنتجات)
 ipcMain.handle('record-kids-area-sale', async (event, { unitPrice }) => {
   const __denied = await denyUnless('kids-area', 'add');
   if (__denied) return __denied;
   return new Promise((resolve) => {
     const price = Number(unitPrice);
     if (isNaN(price) || price < 0) return resolve({ success: false, error: 'سعر غير صالح' });
-    getInternalKidsAreaProductId((err, productId) => {
-      if (err) return resolve({ success: false, error: err.message });
-      addStandaloneSale({ product_id: productId, quantity: 1, price: price }, (err2) => {
-        if (err2) return resolve({ success: false, error: err2.message });
-        resolve({ success: true });
-      });
+    addStandaloneSale({ product_id: null, quantity: 1, price: price, is_kids_area: 1 }, (err2) => {
+      if (err2) return resolve({ success: false, error: err2.message });
+      resolve({ success: true });
     });
   });
 });
@@ -8109,8 +8137,7 @@ function getActiveShiftStats(cb) {
 
                 db.get(`SELECT COALESCE(SUM(ss.total),0) as k_total, COUNT(*) as k_cnt
                   FROM standalone_sales ss
-                  INNER JOIN products p ON ss.product_id = p.id AND p.category = '__internal_kids_area__'
-                  WHERE ss.date >= ? AND ss.date <= ?`, [shiftStartTime, currentTime], (err, kidsRes) => {
+                  WHERE ss.is_kids_area = 1 AND ss.date >= ? AND ss.date <= ?`, [shiftStartTime, currentTime], (err, kidsRes) => {
                   if (err) {
                     console.error('❌ خطأ في حساب مبيعات Kids Area:', err);
                     return cb(err);

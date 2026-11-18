@@ -5611,11 +5611,13 @@
         <tr style='background:#2d2d6a;color:#fff;'><th>المنتج</th><th>التصنيف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th><th>التاريخ</th><th>فاتورة</th></tr>`;
       for (const s of sales) {
         const prod = products.find(p => p.id === s.product_id);
-        const productName = prod ? (prod.name || '-') : 'المنتج لم يعد موجود';
+        const kidsSale = isKidsAreaSale(s);
+        const productName = kidsSale ? 'Kids Area' : (prod ? (prod.name || '-') : 'المنتج لم يعد موجود');
+        const categoryName = kidsSale ? 'Kids Area' : (prod && prod.category ? prod.category : '-');
         const dateStr = s.date ? new Date(s.date).toLocaleString('ar-EG') : '-';
         html += `<tr style='text-align:center;border-bottom:1px solid #eee;'>
           <td>${productName}</td>
-          <td>${prod && prod.category ? prod.category : '-'}</td>
+          <td>${categoryName}</td>
           <td>${s.quantity}</td>
           <td>${s.price.toFixed(2)} جنيه</td>
           <td>${s.total.toFixed(2)} جنيه</td>
@@ -5663,7 +5665,7 @@
     // طباعة فاتورة بيع منفصل
     function printStandaloneSaleInvoice(sale) {
       const win = window.open('', '', 'width=400,height=600');
-      const productName = sale.name || 'المنتج لم يعد موجود';
+      const productName = isKidsAreaSale(sale) ? 'Kids Area' : (sale.name || 'المنتج لم يعد موجود');
       const dateStr = sale.date ? new Date(sale.date).toLocaleString('ar-EG') : '-';
       win.document.write(`
         <html><head><title>طباعة الفاتورة</title>
@@ -6905,22 +6907,18 @@
       return true;
     }
 
+    // هل المبيعة المنفصلة دي عملية Kids Area؟ (مفيش منتج لينكها — العمود is_kids_area)
+    function isKidsAreaSale(sale) {
+      if (!sale) return false;
+      return Number(sale.is_kids_area) === 1 || sale.product_category === '__internal_kids_area__';
+    }
+
     async function recordKidsAreaSaleToShift(unitPrice) {
-      if (!(await requirePerm('kids-area', 'add', 'ليس لديك صلاحية لتسجيل بيع في منطقة الأطفال'))) return;
+      if (!(await requirePerm('kids-area', 'add', 'ليس لديك صلاحية لتسجيل بيع في منطقة الأطفال'))) return false;
       const price = Number(unitPrice) || 0;
-      if (window.electronAPI && typeof window.electronAPI.recordKidsAreaSale === 'function') {
-        const r = await window.electronAPI.recordKidsAreaSale({ unitPrice: price });
-        if (r && r.success) return true;
-      }
-      try {
-        const products = await window.productsAPI.getProducts();
-        const ka = (products || []).find(p => p.category === '__internal_kids_area__');
-        if (ka) {
-          const r2 = await window.standaloneSalesAPI.add({ product_id: ka.id, quantity: 1, price: price });
-          return r2 && r2.success;
-        }
-      } catch (_) { /* ignore */ }
-      return false;
+      if (!(window.electronAPI && typeof window.electronAPI.recordKidsAreaSale === 'function')) return false;
+      const r = await window.electronAPI.recordKidsAreaSale({ unitPrice: price });
+      return !!(r && r.success);
     }
 
     async function showKidsAreaCompletionInvoiceModal(booking) {
@@ -10086,8 +10084,9 @@
       }
       const data = filtered.map(s => {
         const prod = products.find(p => p.id === s.product_id);
-        const productName = prod ? (prod.name || '-') : 'المنتج لم يعد موجود';
-        const category = prod && prod.category ? prod.category : '-';
+        const kidsSale = isKidsAreaSale(s);
+        const productName = kidsSale ? 'Kids Area' : (prod ? (prod.name || '-') : 'المنتج لم يعد موجود');
+        const category = kidsSale ? 'Kids Area' : (prod && prod.category ? prod.category : '-');
         const dateStr = s.date ? new Date(s.date).toLocaleString('ar-EG') : '-';
         return {
           'المنتج': productName,
@@ -10122,8 +10121,9 @@
       }
       const data = filtered.map(s => {
         const prod = products.find(p => p.id === s.product_id);
-        const productName = prod ? (prod.name || '-') : 'المنتج لم يعد موجود';
-        const category = prod && prod.category ? prod.category : '-';
+        const kidsSale = isKidsAreaSale(s);
+        const productName = kidsSale ? 'Kids Area' : (prod ? (prod.name || '-') : 'المنتج لم يعد موجود');
+        const category = kidsSale ? 'Kids Area' : (prod && prod.category ? prod.category : '-');
         const dateStr = s.date ? new Date(s.date).toLocaleString('ar-EG') : '-';
         return [
           productName,
@@ -13359,12 +13359,12 @@
         const sessionsDiscount = (sessions || []).reduce((sum, s) => sum + (s.discount_amount || 0), 0);
         const sessionsRevenue = (sessions || []).reduce((sum, s) => sum + (s.total || 0) - (s.discount_amount || 0), 0);
         const standaloneRevenue = (standaloneSales || []).reduce((sum, s) => sum + (s.total || 0), 0);
-        const kidsSalesRows = (standaloneSales || []).filter(s => s.product_category === '__internal_kids_area__');
+        const kidsSalesRows = (standaloneSales || []).filter(isKidsAreaSale);
         const kidsAreaRevenue = kidsSalesRows.reduce((sum, s) => sum + (s.total || 0), 0);
         const kidsAreaOps = kidsSalesRows.length;
         const standaloneRevenueExKids = Math.max(0, standaloneRevenue - kidsAreaRevenue);
         const standaloneQty = (standaloneSales || []).reduce((sum, s) => sum + (s.quantity || 0), 0);
-        const standaloneQtyExKids = (standaloneSales || []).filter(s => s.product_category !== '__internal_kids_area__').reduce((sum, s) => sum + (s.quantity || 0), 0);
+        const standaloneQtyExKids = (standaloneSales || []).filter(s => !isKidsAreaSale(s)).reduce((sum, s) => sum + (s.quantity || 0), 0);
         const expensesTotal = (expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
 
         // اجمالي منتجات الجلسات (قيمة وكمية) لاستخدامها في الملخص السريع
@@ -13706,7 +13706,7 @@
           standaloneSales.forEach(sale => {
             html += `
               <tr>
-                <td style="padding: 8px; border: 1px solid #dee2e6;">${sale.product_name || 'غير محدد'}</td>
+                <td style="padding: 8px; border: 1px solid #dee2e6;">${isKidsAreaSale(sale) ? 'Kids Area' : (sale.product_name || 'غير محدد')}</td>
                 <td style="padding: 8px; border: 1px solid #dee2e6;">${sale.quantity}</td>
                 <td style="padding: 8px; border: 1px solid #dee2e6;">${sale.price} ج.م</td>
                 <td style="padding: 8px; border: 1px solid #dee2e6;">${sale.total} ج.م</td>
@@ -13941,7 +13941,7 @@
         let kaOpsDetail = 0;
         if (standaloneStatsForKa && Array.isArray(standaloneStatsForKa.sales)) {
           standaloneStatsForKa.sales.forEach(s => {
-            if (s.product_category === '__internal_kids_area__') {
+            if (isKidsAreaSale(s)) {
               kaRevDetail += Number(s.total) || 0;
               kaOpsDetail += 1;
             }
