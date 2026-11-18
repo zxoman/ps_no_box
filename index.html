@@ -6155,6 +6155,7 @@
     }
 
     async function deleteDebt(id) {
+      if (!(await requireAnyPerm([['clients', 'delete'], ['debts', 'delete']], 'ليس لديك صلاحية لحذف المديونية'))) return;
       const confirmed = await showConfirmModal('تأكيد حذف المديونية؟');
       if (!confirmed) return;
       const res = await window.debtsAPI.delete(id);
@@ -6165,6 +6166,7 @@
     }
 
     async function editDebt(id) {
+      if (!(await requireAnyPerm([['clients', 'edit'], ['debts', 'edit']], 'ليس لديك صلاحية لتعديل المديونية'))) return;
       const res = await window.debtsAPI.getAll();
       const debts = (res && res.success) ? res.data : [];
       const d = debts.find(x => x.id === id);
@@ -6232,6 +6234,7 @@
     }
 
     async function markDebtPaid(id) {
+      if (!(await requireAnyPerm([['clients', 'edit'], ['debts', 'edit']], 'ليس لديك صلاحية لتسديد المديونية'))) return;
       const confirmed = await showConfirmModal('تأكيد تسديد هذه المديونية وإضافتها للشيفت الحالي؟');
       if (!confirmed) return;
       const res = await window.debtsAPI.markPaid(id);
@@ -6527,10 +6530,16 @@
     async function manageClientBalance(clientId, clientName) {
       const balanceRes = await window.clientsAPI.getBalance(clientId);
       const currentBalance = balanceRes.success ? balanceRes.balance : 0;
+      // شيل أي نافذة قديمة مفتوحة
+      const oldModal = document.getElementById('client-balance-modal');
+      if (oldModal) oldModal.remove();
       const modal = document.createElement('div');
+      modal.id = 'client-balance-modal';
       modal.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:#0008;z-index:2000;display:flex;align-items:center;justify-content:center;';
       modal.innerHTML = `
-        <div style="background:#fff;padding:30px;border-radius:10px;min-width:400px;max-width:90vw;">
+        <div style="background:#fff;padding:30px;border-radius:10px;min-width:400px;max-width:90vw;position:relative;">
+          <button type="button" title="إغلاق" onclick="document.getElementById('client-balance-modal').remove()"
+            style="position:absolute;top:10px;left:10px;background:none;border:none;font-size:1.6em;line-height:1;cursor:pointer;color:#666;">×</button>
           <h3 style="margin-bottom:10px;color:#2d2d6a;">إدارة رصيد العميل: ${clientName}</h3>
           <div style="text-align:center;font-size:1.3em;margin-bottom:20px;padding:15px;background:#f8f9fa;border-radius:8px;">
             الرصيد الحالي: <strong style="color:${currentBalance >= 0 ? '#28a745' : '#dc3545'};">${Number(currentBalance).toFixed(2)} ج.م</strong>
@@ -6550,11 +6559,20 @@
             <div id="modal-balance-error" style="color:#c62828;margin-top:10px;display:none;text-align:center;"></div>
             <div style="display:flex;gap:10px;justify-content:center;margin-top:20px;">
               <button type="submit" class="action" style="background:#28a745;font-size:1em;padding:10px 30px;">تأكيد</button>
-              <button type="button" class="action" style="background:#aaa;font-size:1em;padding:10px 30px;" onclick="this.closest('div[style]').parentElement.remove()">إلغاء</button>
+              <button type="button" class="action" style="background:#aaa;font-size:1em;padding:10px 30px;" onclick="document.getElementById('client-balance-modal').remove()">إغلاق</button>
             </div>
           </form>
         </div>`;
       document.body.appendChild(modal);
+      // الإغلاق بالضغط على الخلفية أو زر Esc
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+      const escHandler = (e) => {
+        if (e.key === 'Escape') {
+          modal.remove();
+          document.removeEventListener('keydown', escHandler);
+        }
+      };
+      document.addEventListener('keydown', escHandler);
       modal.querySelector('#balance-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const errEl = modal.querySelector('#modal-balance-error');
@@ -6584,6 +6602,7 @@
     }
 
     async function addDebtForClient(clientId, clientName) {
+      if (!(await requireAnyPerm([['clients', 'add'], ['debts', 'add']], 'ليس لديك صلاحية لإضافة مديونية'))) return;
       // إنشاء نافذة لإضافة مديونية
       const modal = document.createElement('div');
       modal.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:#0008;z-index:2000;display:flex;align-items:center;justify-content:center;';
@@ -6669,6 +6688,7 @@
     }
 
     async function payClientDebt(clientId, clientName, totalUnpaid) {
+      if (!(await requireAnyPerm([['clients', 'edit'], ['debts', 'edit']], 'ليس لديك صلاحية لتسديد المديونية'))) return;
       // جلب المديونيات غير المسددة للعميل
       const debtsRes = await window.debtsAPI.getAll();
       const allDebts = (debtsRes && debtsRes.success && Array.isArray(debtsRes.data)) ? debtsRes.data : [];
@@ -8850,6 +8870,12 @@
 
       permissionsFields.style.display = 'block';
 
+      // احفظ الحالة الحالية قبل إعادة البناء (تغيير الدور ما يمسحش الصلاحيات المعلّمة)
+      const previousState = {};
+      permissionsContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        previousState[cb.className + '|' + cb.dataset.page] = cb.checked;
+      });
+
       // جلب جميع الصفحات المتاحة
       const pages = await window.usersAPI.getAllPages();
 
@@ -8879,8 +8905,29 @@
         `;
       });
 
+      html = `<div style="margin-bottom:10px;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <button type="button" class="action" style="padding:4px 12px;background:#2d6a2d;" onclick="setAllPermissions(true)">تحديد الكل</button>
+          <button type="button" class="action" style="padding:4px 12px;background:#aaa;" onclick="setAllPermissions(false)">إلغاء الكل</button>
+        </div>
+        <div style="color:#856404;background:#fff3cd;border:1px solid #ffe08a;border-radius:5px;padding:6px 10px;font-size:0.9em;">
+          «عرض» بتخلي المستخدم يشوف الصفحة فقط — لازم تعلّم «إضافة / تعديل / حذف» عشان يقدر ينفذ الإجراءات.
+        </div>
+      </div>` + html;
+
       permissionsContainer.innerHTML = html;
+
+      // رجّع الحالة اللي كانت معلّمة
+      Object.entries(previousState).forEach(([key, checked]) => {
+        const [cls, page] = key.split('|');
+        const el = permissionsContainer.querySelector(`.${cls}[data-page="${page}"]`);
+        if (el) el.checked = checked;
+      });
     }
+    // تعليم/إلغاء كل الصلاحيات
+    window.setAllPermissions = function (checked) {
+      document.querySelectorAll('#permissions-container input[type="checkbox"]').forEach(cb => { cb.checked = !!checked; });
+    };
     // عند فتح نافذة إضافة مستخدم
     async function openAddUserModal() {
       if (!currentUser || currentUser.role !== 'admin') {
@@ -8967,16 +9014,25 @@
               const editCheckbox = document.querySelector(`.perm-edit[data-page="${page.id}"]`);
               const deleteCheckbox = document.querySelector(`.perm-delete[data-page="${page.id}"]`);
 
+              const canAdd = addCheckbox ? addCheckbox.checked : false;
+              const canEdit = editCheckbox ? editCheckbox.checked : false;
+              const canDelete = deleteCheckbox ? deleteCheckbox.checked : false;
               permissions.push({
                 page: page.id,
-                can_view: viewCheckbox ? viewCheckbox.checked : false,
-                can_add: addCheckbox ? addCheckbox.checked : false,
-                can_edit: editCheckbox ? editCheckbox.checked : false,
-                can_delete: deleteCheckbox ? deleteCheckbox.checked : false
+                // أي إجراء بيفتح العرض تلقائيًا (عشان الصفحة تظهر للمستخدم)
+                can_view: (viewCheckbox ? viewCheckbox.checked : false) || canAdd || canEdit || canDelete,
+                can_add: canAdd,
+                can_edit: canEdit,
+                can_delete: canDelete
               });
             });
 
-            await window.usersAPI.setUserPermissions(parseInt(id), permissions);
+            const permRes = await window.usersAPI.setUserPermissions(parseInt(id), permissions);
+            if (!permRes || !permRes.success) {
+              document.getElementById('user-error').textContent = permRes && permRes.error ? permRes.error : 'فشل حفظ الصلاحيات';
+              document.getElementById('user-error').style.display = 'block';
+              return;
+            }
           }
         } else {
           // إضافة مستخدم جديد
@@ -8993,12 +9049,16 @@
               const editCheckbox = document.querySelector(`.perm-edit[data-page="${page.id}"]`);
               const deleteCheckbox = document.querySelector(`.perm-delete[data-page="${page.id}"]`);
 
+              const canAdd = addCheckbox ? addCheckbox.checked : false;
+              const canEdit = editCheckbox ? editCheckbox.checked : false;
+              const canDelete = deleteCheckbox ? deleteCheckbox.checked : false;
               permissions.push({
                 page: page.id,
-                can_view: viewCheckbox ? viewCheckbox.checked : false,
-                can_add: addCheckbox ? addCheckbox.checked : false,
-                can_edit: editCheckbox ? editCheckbox.checked : false,
-                can_delete: deleteCheckbox ? deleteCheckbox.checked : false
+                // أي إجراء بيفتح العرض تلقائيًا (عشان الصفحة تظهر للمستخدم)
+                can_view: (viewCheckbox ? viewCheckbox.checked : false) || canAdd || canEdit || canDelete,
+                can_add: canAdd,
+                can_edit: canEdit,
+                can_delete: canDelete
               });
             });
 
@@ -9006,7 +9066,12 @@
             const users = await window.usersAPI.getUsers();
             const newUser = users.find(u => u.username === username);
             if (newUser) {
-              await window.usersAPI.setUserPermissions(newUser.id, permissions);
+              const permRes = await window.usersAPI.setUserPermissions(newUser.id, permissions);
+              if (!permRes || !permRes.success) {
+                document.getElementById('user-error').textContent = permRes && permRes.error ? permRes.error : 'فشل حفظ الصلاحيات';
+                document.getElementById('user-error').style.display = 'block';
+                return;
+              }
             }
           }
         }
@@ -9075,6 +9140,15 @@
       const ok = await checkPermission(page, action);
       if (!ok) showToast(message || 'ليس لديك صلاحية لتنفيذ هذا الإجراء', 'error');
       return ok;
+    }
+
+    // مسموح لو المستخدم عنده أي واحدة من الصلاحيات المطلوبة
+    async function requireAnyPerm(rules, message) {
+      for (const [page, action] of rules) {
+        if (await checkPermission(page, action)) return true;
+      }
+      showToast(message || 'ليس لديك صلاحية لتنفيذ هذا الإجراء', 'error');
+      return false;
     }
 
     // دالة لإخفاء/إظهار عناصر الواجهة حسب الصلاحيات
@@ -12906,6 +12980,7 @@
       if (form) {
         form.onsubmit = async function(e) {
           e.preventDefault();
+          if (!(await requireAnyPerm([['clients', 'add'], ['debts', 'add'], ['shifts', 'add']], 'ليس لديك صلاحية لتسجيل الأمانة'))) return;
           const clientName = document.getElementById('trust-client-name').value.trim();
           const clientId = document.getElementById('trust-client-id').value;
           const phone = document.getElementById('trust-phone').value.trim();

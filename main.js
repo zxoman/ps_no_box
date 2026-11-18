@@ -4090,7 +4090,7 @@ function markDebtAsPaid(id, cb) {
 
 // أوامر IPC للمديونيات
 ipcMain.handle('debts-add', async (event, debt) => {
-  const __denied = await denyUnless('debts', 'add');
+  const __denied = await denyUnlessAny([['debts', 'add'], ['clients', 'add']]);
   if (__denied) return __denied;
   return new Promise((resolve) => {
     addDebt(debt, (err) => {
@@ -4118,7 +4118,7 @@ ipcMain.handle('debts-get-all', async () => {
   });
 });
 ipcMain.handle('debts-update', async (event, debt) => {
-  const __denied = await denyUnless('debts', 'edit');
+  const __denied = await denyUnlessAny([['debts', 'edit'], ['clients', 'edit']]);
   if (__denied) return __denied;
   return new Promise((resolve) => {
     updateDebt(debt, (err) => {
@@ -4128,7 +4128,7 @@ ipcMain.handle('debts-update', async (event, debt) => {
   });
 });
 ipcMain.handle('debts-delete', async (event, id) => {
-  const __denied = await denyUnless('debts', 'delete');
+  const __denied = await denyUnlessAny([['debts', 'delete'], ['clients', 'delete']]);
   if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteDebt(id, (err) => {
@@ -4138,7 +4138,7 @@ ipcMain.handle('debts-delete', async (event, id) => {
   });
 });
 ipcMain.handle('debts-mark-paid', async (event, id) => {
-  const __denied = await denyUnless('debts', 'edit');
+  const __denied = await denyUnlessAny([['debts', 'edit'], ['clients', 'edit']]);
   if (__denied) return __denied;
   return new Promise((resolve) => {
     db.get('SELECT client_name, amount FROM debts WHERE id = ?', [id], (e, debt) => {
@@ -4153,7 +4153,7 @@ ipcMain.handle('debts-mark-paid', async (event, id) => {
   });
 });
 ipcMain.handle('debts-pay-partial', async (event, { debt_id, amount }) => {
-  const __denied = await denyUnless('debts', 'edit');
+  const __denied = await denyUnlessAny([['debts', 'edit'], ['clients', 'edit']]);
   if (__denied) return __denied;
   return new Promise((resolve) => {
     if (!debt_id || !amount || amount <= 0) {
@@ -4227,7 +4227,7 @@ function deleteTrustDeposit(id, cb) {
 }
 
 ipcMain.handle('trust-add', async (event, data) => {
-  const __denied = await denyUnless('debts', 'add');
+  const __denied = await denyUnlessAny([['debts', 'add'], ['clients', 'add'], ['shifts', 'add']]);
   if (__denied) return __denied;
   return new Promise((resolve) => {
     addTrustDeposit(data, (err) => {
@@ -4256,7 +4256,7 @@ ipcMain.handle('trust-get-all', async () => {
   });
 });
 ipcMain.handle('trust-delete', async (event, id) => {
-  const __denied = await denyUnless('debts', 'delete');
+  const __denied = await denyUnlessAny([['debts', 'delete'], ['clients', 'delete']]);
   if (__denied) return __denied;
   return new Promise((resolve) => {
     deleteTrustDeposit(id, (err) => {
@@ -5940,6 +5940,46 @@ ipcMain.handle('get-maintenance-by-type', async (event, type) => {
   });
 });
 
+// قوائم الصفحات الافتراضية حسب الدور
+const ADMIN_PAGES_LIST = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'expenses', 'debts', 'clients', 'bookings', 'maintenance', 'users', 'employees', 'offers', 'backup', 'settings', 'tournaments', 'shifts', 'kids-area', 'hotspot'];
+const CASHIER_PAGES_LIST = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'debts', 'clients', 'bookings', 'shifts', 'kids-area', 'hotspot'];
+const SUPERVISOR_PAGES_LIST = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'expenses', 'debts', 'clients', 'bookings', 'maintenance', 'employees', 'offers', 'shifts', 'kids-area', 'hotspot'];
+
+function getRolePages(role) {
+  if (role === 'admin') return ADMIN_PAGES_LIST;
+  if (role === 'cashier') return CASHIER_PAGES_LIST;
+  return SUPERVISOR_PAGES_LIST;
+}
+
+// بيرجع الصلاحيات الافتراضية للدور (view/add/edit/delete)
+function getRolePermissionRow(role) {
+  if (role === 'admin') return { can_view: 1, can_add: 1, can_edit: 1, can_delete: 1 };
+  if (role === 'cashier') return { can_view: 1, can_add: 1, can_edit: 0, can_delete: 0 };
+  return { can_view: 1, can_add: 1, can_edit: 1, can_delete: 0 };
+}
+
+// يضمن وجود صلاحيات افتراضية للمستخدم لو مفيش أي صف (مهم للمستخدمين القدام)
+function ensureUserPermissions(user, cb) {
+  cb = cb || (() => {});
+  if (!user || !user.id) return cb(null);
+  db.get('SELECT COUNT(*) as cnt FROM user_permissions WHERE user_id = ?', [user.id], (err, row) => {
+    if (err) return cb(err);
+    if (row && row.cnt > 0) return cb(null);
+    const pages = getRolePages(user.role);
+    const perm = getRolePermissionRow(user.role);
+    let done = 0;
+    const total = pages.length;
+    if (total === 0) return cb(null);
+    pages.forEach(page => {
+      db.run('INSERT INTO user_permissions (user_id, page, can_view, can_add, can_edit, can_delete) VALUES (?, ?, ?, ?, ?, ?)',
+        [user.id, page, perm.can_view, perm.can_add, perm.can_edit, perm.can_delete], () => {
+          done++;
+          if (done === total) cb(null);
+        });
+    });
+  });
+}
+
 // دالة لإصلاح صلاحيات المستخدمين الحاليين
 function fixUserPermissions(cb) {
   db.all('SELECT * FROM users', (err, users) => {
@@ -5959,12 +5999,7 @@ function fixUserPermissions(cb) {
           return;
         }
         
-        // قوائم الصفحات حسب الدور (تشمل debts)
-        const adminPages = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'expenses', 'debts', 'clients', 'bookings', 'maintenance', 'users', 'employees', 'offers', 'backup', 'settings', 'tournaments', 'shifts', 'kids-area', 'hotspot'];
-        const cashierPages = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'debts', 'clients', 'bookings', 'shifts', 'kids-area', 'hotspot'];
-        const supervisorPages = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'expenses', 'debts', 'clients', 'bookings', 'maintenance', 'employees', 'offers', 'shifts', 'kids-area', 'hotspot'];
-
-        const targetPages = user.role === 'admin' ? adminPages : (user.role === 'cashier' ? cashierPages : supervisorPages);
+        const targetPages = getRolePages(user.role);
 
         if (row.cnt === 0) {
           // إضافة صلاحيات افتراضية حسب الدور
@@ -6059,17 +6094,13 @@ function addUser(user, cb) {
       pages.forEach(page => {
         db.run('INSERT INTO user_permissions (user_id, page, can_view, can_add, can_edit, can_delete) VALUES (?, ?, 1, 1, 1, 1)', [userId, page]);
       });
-    } else if (user.role === 'cashier') {
-      // المحاسب له صلاحيات محدودة
-      const cashierPages = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'debts', 'clients', 'bookings', 'shifts', 'kids-area', 'hotspot'];
-      cashierPages.forEach(page => {
-        db.run('INSERT INTO user_permissions (user_id, page, can_view, can_add, can_edit, can_delete) VALUES (?, ?, 1, 1, 0, 0)', [userId, page]);
-      });
-    } else if (user.role === 'supervisor') {
-      // المشرف له صلاحيات متوسطة
-      const supervisorPages = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'expenses', 'debts', 'clients', 'bookings', 'maintenance', 'employees', 'offers', 'shifts', 'kids-area', 'hotspot'];
-      supervisorPages.forEach(page => {
-        db.run('INSERT INTO user_permissions (user_id, page, can_view, can_add, can_edit, can_delete) VALUES (?, ?, 1, 1, 1, 0)', [userId, page]);
+    } else {
+      // المحاسب/المشرف: الصلاحيات الافتراضية حسب الدور
+      const pages = getRolePages(user.role);
+      const perm = getRolePermissionRow(user.role);
+      pages.forEach(page => {
+        db.run('INSERT INTO user_permissions (user_id, page, can_view, can_add, can_edit, can_delete) VALUES (?, ?, ?, ?, ?, ?)',
+          [userId, page, perm.can_view, perm.can_add, perm.can_edit, perm.can_delete]);
       });
     }
     
@@ -6344,6 +6375,8 @@ ipcMain.handle('check-login', async (event, { username, password }) => {
     setAuthUser(null);
     return null;
   }
+  // ضمان وجود صلاحيات افتراضية للمستخدم (لو صفوفه ناقصة/مفقودة)
+  await new Promise((resolve) => ensureUserPermissions(user, () => resolve()));
   // تسجيل المستخدم الحالي في العملية الرئيسية (لصلاحيات كل العمليات بعد كده)
   setAuthUser(user);
   // إشعار تيليجرام (اختياري) — ما يأثرش على نتيجة الدخول
@@ -7390,7 +7423,8 @@ function getShiftDetails(shift_id, cb) {
 
 // --- أوامر IPC للشيفتات ---
 ipcMain.handle('start-shift', async (event, data) => {
-  const __denied = await denyUnless('shifts', 'add');
+  // بدء/إنهاء الشيفت متاح لأي مستخدم عنده أي صلاحية على صفحة الشيفتات
+  const __denied = await denyUnlessAny([['shifts', 'view'], ['shifts', 'add'], ['shifts', 'edit'], ['shifts', 'delete']]);
   if (__denied) return __denied;
   return new Promise((resolve) => {
     startShift(data, (err, result) => {
@@ -7401,7 +7435,8 @@ ipcMain.handle('start-shift', async (event, data) => {
 });
 
 ipcMain.handle('end-shift', async (event, data) => {
-  const __denied = await denyUnless('shifts', 'add');
+  // بدء/إنهاء الشيفت متاح لأي مستخدم عنده أي صلاحية على صفحة الشيفتات
+  const __denied = await denyUnlessAny([['shifts', 'view'], ['shifts', 'add'], ['shifts', 'edit'], ['shifts', 'delete']]);
   if (__denied) return __denied;
   return new Promise(async (resolve) => {
     // منع إنهاء الشيفت لو فيه جلسات مفتوحة (عشان الجلسات تقدر تتقفل قبل الشيفت)
