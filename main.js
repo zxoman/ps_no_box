@@ -5942,7 +5942,7 @@ ipcMain.handle('get-maintenance-by-type', async (event, type) => {
 
 // قوائم الصفحات الافتراضية حسب الدور
 const ADMIN_PAGES_LIST = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'expenses', 'debts', 'clients', 'bookings', 'maintenance', 'users', 'employees', 'offers', 'backup', 'settings', 'tournaments', 'shifts', 'kids-area', 'hotspot'];
-const CASHIER_PAGES_LIST = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'debts', 'clients', 'bookings', 'shifts', 'kids-area', 'hotspot'];
+const CASHIER_PAGES_LIST = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'debts', 'clients', 'bookings', 'kids-area', 'hotspot'];
 const SUPERVISOR_PAGES_LIST = ['dashboard', 'devices', 'sessions', 'products', 'invoices', 'expenses', 'debts', 'clients', 'bookings', 'maintenance', 'employees', 'offers', 'shifts', 'kids-area', 'hotspot'];
 
 function getRolePages(role) {
@@ -7423,8 +7423,8 @@ function getShiftDetails(shift_id, cb) {
 
 // --- أوامر IPC للشيفتات ---
 ipcMain.handle('start-shift', async (event, data) => {
-  // بدء/إنهاء الشيفت متاح لأي مستخدم عنده أي صلاحية على صفحة الشيفتات
-  const __denied = await denyUnlessAny([['shifts', 'view'], ['shifts', 'add'], ['shifts', 'edit'], ['shifts', 'delete']]);
+  // زر بدء/إنهاء الشيفت موجود في لوحة التحكم → بيعتمد على صلاحية عرض لوحة التحكم
+  const __denied = await denyUnless('dashboard', 'view');
   if (__denied) return __denied;
   return new Promise((resolve) => {
     startShift(data, (err, result) => {
@@ -7435,8 +7435,8 @@ ipcMain.handle('start-shift', async (event, data) => {
 });
 
 ipcMain.handle('end-shift', async (event, data) => {
-  // بدء/إنهاء الشيفت متاح لأي مستخدم عنده أي صلاحية على صفحة الشيفتات
-  const __denied = await denyUnlessAny([['shifts', 'view'], ['shifts', 'add'], ['shifts', 'edit'], ['shifts', 'delete']]);
+  // زر بدء/إنهاء الشيفت موجود في لوحة التحكم → بيعتمد على صلاحية عرض لوحة التحكم
+  const __denied = await denyUnless('dashboard', 'view');
   if (__denied) return __denied;
   return new Promise(async (resolve) => {
     // منع إنهاء الشيفت لو فيه جلسات مفتوحة (عشان الجلسات تقدر تتقفل قبل الشيفت)

@@ -8881,6 +8881,8 @@
 
       let html = '';
       pages.forEach(page => {
+        // الكاشير مش بيشوف صفحة الشيفتات أصلاً → منعرضش صلاحيتها
+        if (role === 'cashier' && page.id === 'shifts') return;
         html += `
           <div style="margin-bottom:15px;padding:10px;border:1px solid #e0e0e0;border-radius:5px;background:#f9f9f9;">
             <div style="font-weight:bold;margin-bottom:8px;color:#2d2d6a;">
@@ -9164,6 +9166,11 @@
           button.style.display = isAdmin ? 'block' : 'none';
           continue;
         }
+        // الكاشير مش بيشوف صفحة الشيفتات (بدء/إنهاء الشيفت من لوحة التحكم)
+        if (pageId === 'shifts' && !isAdmin && currentUser && currentUser.role === 'cashier') {
+          button.style.display = 'none';
+          continue;
+        }
         const hasPermission = await checkPermission(pageId, 'view');
 
         if (!hasPermission) {
@@ -9176,6 +9183,11 @@
       if (!isAdmin) {
         const pageUsers = document.getElementById('page-users');
         if (pageUsers) pageUsers.classList.add('hidden');
+      }
+      // الكاشير مش بيشوف صفحة الشيفتات ولا زر عرضها
+      if (currentUser && currentUser.role === 'cashier') {
+        const viewShiftsBtn = document.getElementById('view-shifts-btn');
+        if (viewShiftsBtn) viewShiftsBtn.style.display = 'none';
       }
     }
 
@@ -14125,6 +14137,10 @@
       const viewShiftsBtn = document.getElementById('view-shifts-btn');
       if (viewShiftsBtn) {
         viewShiftsBtn.addEventListener('click', async function () {
+          if (currentUser && currentUser.role === 'cashier') {
+            showToast('ليس لديك صلاحية لعرض صفحة الشيفتات', 'error');
+            return;
+          }
           showPage('page-shifts');
           shiftsCurrentPage = 1;
           try {
